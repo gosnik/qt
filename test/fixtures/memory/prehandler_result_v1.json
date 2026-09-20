@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "logical_input_sequence": 7,
+  "context_markdown": "## Recalled memory\n\n- [mem_validated_build] Native builds use PlatformIO and C++17.\n\n## Warnings\n\n- [mem_hypothesis_memory] hypothesis: A clean rebuild may fix the linker failure.",
+  "memory_ids": ["mem_validated_build", "mem_hypothesis_memory"],
+  "block_ids": [],
+  "warnings": [
+    {
+      "code": "untrusted_lifecycle",
+      "memory_id": "mem_hypothesis_memory",
+      "message": "The recalled memory is a hypothesis and is not validated."
+    }
+  ],
+  "estimated_tokens": 55,
+  "omission_reason": "",
+  "candidate_pack_hash": "fixture-candidate-pack-v1",
+  "output_hash": ""
+}

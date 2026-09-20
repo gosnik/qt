@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "description": "V2 retrieval baseline corpus: realistic native repository memories and labelled queries.",
+  "memories": [
+    {"id":"alpha-review-atomicity","scope":"alpha","status":"validated","confidence":0.96,"quality":0.9,"content":"The governed review mutation path must apply the decision and its memory status change atomically in one SQLite transaction; retry after a crash must remain possible."},
+    {"id":"alpha-review-preview-token","scope":"alpha","status":"active","confidence":0.91,"quality":0.85,"content":"Review previews are bound to a revision and idempotency token so a stale approval cannot mutate a changed subject."},
+    {"id":"alpha-apply-review-symbol","scope":"alpha","status":"validated","confidence":0.94,"quality":0.9,"content":"The function apply_review_mutation is the native owner of governed review writes in src/memory/storage/sqlite_memory_database.cpp."},
+    {"id":"alpha-retry-recovery","scope":"alpha","status":"validated","confidence":0.93,"quality":0.88,"content":"A failed durable capture must leave a retryable job; a completed claim is recorded only after the write commits, so worker recovery cannot lose work."},
+    {"id":"alpha-retry-incident","scope":"alpha","status":"active","confidence":0.82,"quality":0.78,"content":"The 2025 capture incident involved a worker acknowledging a memory before its transaction completed; recovery then skipped the missing claim."},
+    {"id":"alpha-code-index-freshness","scope":"alpha","status":"validated","confidence":0.95,"quality":0.88,"content":"Code snapshots are whole-snapshot generations. A loaded snapshot is stale until a successful scan, and source fingerprints must be checked before current code enters context."},
+    {"id":"alpha-legacy-code-index","scope":"alpha","status":"deprecated","confidence":0.9,"quality":0.7,"content":"The old code index used name-only function IDs and could silently select the last same-name target."},
+    {"id":"alpha-current-branch-policy","scope":"alpha","status":"validated","confidence":0.95,"quality":0.92,"content":"Current release work uses the main branch and requires a clean native build before merging."},
+    {"id":"alpha-build-toolchain","scope":"alpha","status":"validated","confidence":0.95,"quality":0.9,"content":"The alpha repository builds with PlatformIO and C++17 using the native environment."},
+    {"id":"alpha-old-branch-policy","scope":"alpha","status":"superseded","confidence":0.94,"quality":0.75,"content":"Historical release work used the develop branch before the repository moved to main."},
+    {"id":"alpha-cache-policy-new","scope":"alpha","status":"validated","confidence":0.86,"quality":0.8,"content":"The current policy keeps build caches disposable and never treats generated artifacts as source evidence."},
+    {"id":"alpha-cache-policy-old","scope":"alpha","status":"active","confidence":0.84,"quality":0.76,"content":"An earlier cache policy treated generated build output as reusable evidence for debugging."},
+    {"id":"alpha-multi-hop-decision","scope":"alpha","status":"validated","confidence":0.9,"quality":0.86,"content":"The retry incident led to the atomic capture decision; the decision is documented in the recovery runbook."},
+    {"id":"beta-build-toolchain","scope":"beta","status":"validated","confidence":0.99,"quality":0.95,"content":"The beta repository builds with Meson and Clang; its release branch is stable."},
+    {"id":"beta-review-policy","scope":"beta","status":"validated","confidence":0.95,"quality":0.9,"content":"Beta review approvals use a separate service and do not share alpha's SQLite mutation path."},
+    {"id":"global-security-baseline","scope":"global","status":"validated","confidence":0.97,"quality":0.95,"content":"Never place passwords or private absolute paths in durable memory; redact them before persistence."}
+  ],
+  "queries": [
+    {"id":"exact-symbol","scope":"alpha","query":"What does apply_review_mutation own?","relevant":["alpha-apply-review-symbol"],"forbidden":["beta-review-policy"]},
+    {"id":"heldout-paraphrase","scope":"alpha","query":"Before editing the governed review write path, how do I preserve all-or-nothing status changes?","relevant":["alpha-review-atomicity","alpha-review-preview-token"]},
+    {"id":"scope-isolation","scope":"alpha","query":"Which build toolchain is used for this repository?","relevant":["alpha-build-toolchain"],"forbidden":["beta-build-toolchain"]},
+    {"id":"multi-hop","scope":"alpha","query":"Which recovery decision followed the capture incident?","relevant":["alpha-multi-hop-decision","alpha-retry-incident","alpha-retry-recovery"]},
+    {"id":"temporal-current","scope":"alpha","query":"What is the current release branch policy?","relevant":["alpha-current-branch-policy"],"forbidden":["alpha-old-branch-policy"]},
+    {"id":"contradictory-cache","scope":"alpha","query":"What is the approved cache policy for source evidence?","relevant":["alpha-cache-policy-new"],"forbidden":["alpha-cache-policy-old"]},
+    {"id":"freshness","scope":"alpha","query":"When can a code snapshot be trusted after source edits?","relevant":["alpha-code-index-freshness"]},
+    {"id":"security-scope","scope":"alpha","query":"What sensitive data must never be stored in memory?","relevant":["global-security-baseline"]}
+  ]
+}

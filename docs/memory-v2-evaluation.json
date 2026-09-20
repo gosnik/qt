@@ -1,0 +1,2406 @@
+{
+  "bm25": {
+    "cases": [
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "exact-symbol",
+        "injected_labels": [
+          "alpha-apply-review-symbol"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 1
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "heldout-paraphrase",
+        "injected_labels": [
+          "alpha-review-atomicity",
+          "alpha-current-branch-policy",
+          "alpha-apply-review-symbol",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-multi-hop-decision",
+          "alpha-cache-policy-new",
+          "alpha-review-preview-token",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 2,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "scope-isolation",
+        "injected_labels": [
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-multi-hop-decision",
+          "alpha-cache-policy-new",
+          "alpha-apply-review-symbol",
+          "alpha-cache-policy-old"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 8
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "multi-hop",
+        "injected_labels": [
+          "alpha-multi-hop-decision",
+          "alpha-review-atomicity",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-build-toolchain",
+          "alpha-current-branch-policy",
+          "alpha-apply-review-symbol",
+          "alpha-cache-policy-new"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 8
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "temporal-current",
+        "injected_labels": [
+          "alpha-current-branch-policy",
+          "alpha-cache-policy-new",
+          "alpha-apply-review-symbol",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-review-atomicity",
+          "alpha-cache-policy-old",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": true,
+        "forbidden_injected_labels": [
+          "alpha-cache-policy-old"
+        ],
+        "id": "contradictory-cache",
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-build-toolchain",
+          "alpha-apply-review-symbol",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-retry-recovery",
+          "alpha-cache-policy-old",
+          "alpha-current-branch-policy",
+          "alpha-review-atomicity",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "freshness",
+        "injected_labels": [
+          "alpha-code-index-freshness",
+          "alpha-cache-policy-new",
+          "alpha-current-branch-policy",
+          "alpha-review-atomicity",
+          "alpha-retry-recovery",
+          "alpha-review-preview-token",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 7
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 12,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "security-scope",
+        "injected_labels": [
+          "alpha-review-atomicity",
+          "alpha-apply-review-symbol",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-multi-hop-decision",
+          "alpha-cache-policy-new",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-retry-incident",
+          "alpha-review-preview-token",
+          "alpha-cache-policy-old",
+          "global-security-baseline"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 11
+          },
+          {
+            "eligible_for_context": true,
+            "label": "global-security-baseline",
+            "rank": 12
+          }
+        ]
+      }
+    ],
+    "metrics": {
+      "context_memory_injected_count": 66,
+      "context_omitted_count": 8,
+      "eligible_candidate_count": 66,
+      "forbidden_candidate_rate": 0.125,
+      "forbidden_eligible_count": 1,
+      "forbidden_injected_count": 1,
+      "hit_at_1": 0.75,
+      "hit_at_3": 0.875,
+      "hit_at_5": 0.875,
+      "latency_avg_ms": 142.18675375,
+      "latency_p50_ms": 172.247368,
+      "latency_p95_ms": 206.573359,
+      "mrr": 0.8229166666666666,
+      "recall_at_1": 0.6041666666666666,
+      "recall_at_3": 0.7708333333333333,
+      "recall_at_5": 0.8125,
+      "warm_latency_p50_ms": 137.533315,
+      "warm_latency_p95_ms": 206.145629,
+      "warm_samples": 24
+    }
+  },
+  "bm25_dense": {
+    "cases": [
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "exact-symbol",
+        "injected_labels": [
+          "alpha-apply-review-symbol",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-multi-hop-decision",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-cache-policy-new",
+          "alpha-build-toolchain",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "heldout-paraphrase",
+        "injected_labels": [
+          "alpha-review-atomicity",
+          "alpha-apply-review-symbol",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-retry-recovery",
+          "alpha-multi-hop-decision",
+          "alpha-code-index-freshness",
+          "alpha-cache-policy-new",
+          "alpha-retry-incident",
+          "alpha-build-toolchain",
+          "alpha-cache-policy-old"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "scope-isolation",
+        "injected_labels": [
+          "alpha-build-toolchain",
+          "alpha-current-branch-policy",
+          "alpha-cache-policy-old",
+          "alpha-cache-policy-new",
+          "alpha-apply-review-symbol",
+          "alpha-multi-hop-decision",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "multi-hop",
+        "injected_labels": [
+          "alpha-multi-hop-decision",
+          "alpha-retry-incident",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-cache-policy-new",
+          "alpha-apply-review-symbol",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-review-preview-token"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "temporal-current",
+        "injected_labels": [
+          "alpha-current-branch-policy",
+          "alpha-cache-policy-new",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "alpha-review-atomicity",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-retry-incident",
+          "alpha-review-preview-token"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": true,
+        "forbidden_injected_labels": [
+          "alpha-cache-policy-old"
+        ],
+        "id": "contradictory-cache",
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-apply-review-symbol",
+          "alpha-multi-hop-decision",
+          "alpha-review-atomicity",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-review-preview-token"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "freshness",
+        "injected_labels": [
+          "alpha-code-index-freshness",
+          "alpha-cache-policy-new",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-retry-incident",
+          "alpha-cache-policy-old",
+          "alpha-apply-review-symbol",
+          "alpha-build-toolchain",
+          "alpha-multi-hop-decision"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 8,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "security-scope",
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-review-atomicity",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "global-security-baseline",
+          "alpha-cache-policy-old",
+          "alpha-build-toolchain",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "global-security-baseline",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 12
+          }
+        ]
+      }
+    ],
+    "metrics": {
+      "context_memory_injected_count": 89,
+      "context_omitted_count": 26,
+      "eligible_candidate_count": 89,
+      "forbidden_candidate_rate": 0.125,
+      "forbidden_eligible_count": 1,
+      "forbidden_injected_count": 1,
+      "hit_at_1": 0.875,
+      "hit_at_3": 0.875,
+      "hit_at_5": 0.875,
+      "latency_avg_ms": 321.354755125,
+      "latency_p50_ms": 320.423339,
+      "latency_p95_ms": 347.845174,
+      "mrr": 0.890625,
+      "recall_at_1": 0.7291666666666667,
+      "recall_at_3": 0.875,
+      "recall_at_5": 0.875,
+      "warm_latency_p50_ms": 298.959012,
+      "warm_latency_p95_ms": 329.219331,
+      "warm_samples": 24
+    }
+  },
+  "bm25_graph": {
+    "cases": [
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "exact-symbol",
+        "injected_labels": [
+          "alpha-apply-review-symbol"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 1
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "heldout-paraphrase",
+        "injected_labels": [
+          "alpha-review-atomicity",
+          "alpha-apply-review-symbol",
+          "alpha-retry-recovery",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-retry-incident",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-build-toolchain",
+          "alpha-cache-policy-new"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 10
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "scope-isolation",
+        "injected_labels": [
+          "alpha-build-toolchain",
+          "alpha-cache-policy-old",
+          "alpha-cache-policy-new",
+          "alpha-current-branch-policy",
+          "alpha-apply-review-symbol",
+          "alpha-retry-recovery",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 9
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "multi-hop",
+        "injected_labels": [
+          "alpha-multi-hop-decision",
+          "alpha-retry-incident",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-build-toolchain",
+          "alpha-apply-review-symbol",
+          "alpha-cache-policy-new",
+          "alpha-current-branch-policy"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 8
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "temporal-current",
+        "injected_labels": [
+          "alpha-current-branch-policy",
+          "alpha-cache-policy-new",
+          "alpha-code-index-freshness",
+          "alpha-cache-policy-old",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-retry-incident",
+          "alpha-review-atomicity"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 10
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 2,
+        "forbidden_hit": true,
+        "forbidden_injected_labels": [
+          "alpha-cache-policy-old"
+        ],
+        "id": "contradictory-cache",
+        "injected_labels": [
+          "alpha-cache-policy-old",
+          "alpha-cache-policy-new",
+          "alpha-code-index-freshness",
+          "alpha-current-branch-policy",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-retry-incident",
+          "alpha-review-atomicity"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 10
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "freshness",
+        "injected_labels": [
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-cache-policy-new",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-retry-incident",
+          "alpha-multi-hop-decision"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 8
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 12,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "security-scope",
+        "injected_labels": [
+          "alpha-code-index-freshness",
+          "alpha-review-atomicity",
+          "alpha-cache-policy-new",
+          "alpha-retry-recovery",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "alpha-retry-incident",
+          "alpha-build-toolchain",
+          "alpha-cache-policy-old",
+          "alpha-current-branch-policy",
+          "alpha-review-preview-token",
+          "global-security-baseline"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          },
+          {
+            "eligible_for_context": true,
+            "label": "global-security-baseline",
+            "rank": 12
+          }
+        ]
+      }
+    ],
+    "metrics": {
+      "context_memory_injected_count": 68,
+      "context_omitted_count": 8,
+      "eligible_candidate_count": 68,
+      "forbidden_candidate_rate": 0.125,
+      "forbidden_eligible_count": 1,
+      "forbidden_injected_count": 1,
+      "hit_at_1": 0.75,
+      "hit_at_3": 0.875,
+      "hit_at_5": 0.875,
+      "latency_avg_ms": 213.024897,
+      "latency_p50_ms": 252.283276,
+      "latency_p95_ms": 302.320821,
+      "mrr": 0.8229166666666666,
+      "recall_at_1": 0.6041666666666667,
+      "recall_at_3": 0.8125,
+      "recall_at_5": 0.875,
+      "warm_latency_p50_ms": 220.404786,
+      "warm_latency_p95_ms": 302.581685,
+      "warm_samples": 24
+    }
+  },
+  "combined": {
+    "cases": [
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "exact-symbol",
+        "injected_labels": [
+          "alpha-apply-review-symbol",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-multi-hop-decision",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-cache-policy-new",
+          "alpha-build-toolchain",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "heldout-paraphrase",
+        "injected_labels": [
+          "alpha-review-atomicity",
+          "alpha-apply-review-symbol",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-retry-recovery",
+          "alpha-multi-hop-decision",
+          "alpha-code-index-freshness",
+          "alpha-cache-policy-new",
+          "alpha-retry-incident",
+          "alpha-build-toolchain",
+          "alpha-cache-policy-old"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "scope-isolation",
+        "injected_labels": [
+          "alpha-build-toolchain",
+          "alpha-current-branch-policy",
+          "alpha-cache-policy-old",
+          "alpha-cache-policy-new",
+          "alpha-apply-review-symbol",
+          "alpha-multi-hop-decision",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-retry-incident"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "multi-hop",
+        "injected_labels": [
+          "alpha-multi-hop-decision",
+          "alpha-retry-incident",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-cache-policy-new",
+          "alpha-apply-review-symbol",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-review-preview-token"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "temporal-current",
+        "injected_labels": [
+          "alpha-current-branch-policy",
+          "alpha-cache-policy-new",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "alpha-review-atomicity",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-retry-incident",
+          "alpha-review-preview-token"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": true,
+        "forbidden_injected_labels": [
+          "alpha-cache-policy-old"
+        ],
+        "id": "contradictory-cache",
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-cache-policy-old",
+          "alpha-code-index-freshness",
+          "alpha-apply-review-symbol",
+          "alpha-multi-hop-decision",
+          "alpha-review-atomicity",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-review-preview-token"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 1,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "freshness",
+        "injected_labels": [
+          "alpha-code-index-freshness",
+          "alpha-cache-policy-new",
+          "alpha-retry-recovery",
+          "alpha-review-atomicity",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy",
+          "alpha-retry-incident",
+          "alpha-cache-policy-old",
+          "alpha-apply-review-symbol",
+          "alpha-build-toolchain",
+          "alpha-multi-hop-decision"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 11
+          }
+        ]
+      },
+      {
+        "first_relevant_rank": 8,
+        "forbidden_hit": false,
+        "forbidden_injected_labels": [],
+        "id": "security-scope",
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-review-atomicity",
+          "alpha-code-index-freshness",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "global-security-baseline",
+          "alpha-cache-policy-old",
+          "alpha-build-toolchain",
+          "alpha-review-preview-token",
+          "alpha-current-branch-policy"
+        ],
+        "ranking": [
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-new",
+            "rank": 1
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-atomicity",
+            "rank": 2
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-code-index-freshness",
+            "rank": 3
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-recovery",
+            "rank": 4
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-retry-incident",
+            "rank": 5
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-multi-hop-decision",
+            "rank": 6
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-apply-review-symbol",
+            "rank": 7
+          },
+          {
+            "eligible_for_context": true,
+            "label": "global-security-baseline",
+            "rank": 8
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-cache-policy-old",
+            "rank": 9
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-build-toolchain",
+            "rank": 10
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-review-preview-token",
+            "rank": 11
+          },
+          {
+            "eligible_for_context": true,
+            "label": "alpha-current-branch-policy",
+            "rank": 12
+          }
+        ]
+      }
+    ],
+    "metrics": {
+      "context_memory_injected_count": 89,
+      "context_omitted_count": 26,
+      "eligible_candidate_count": 89,
+      "forbidden_candidate_rate": 0.125,
+      "forbidden_eligible_count": 1,
+      "forbidden_injected_count": 1,
+      "hit_at_1": 0.875,
+      "hit_at_3": 0.875,
+      "hit_at_5": 0.875,
+      "latency_avg_ms": 405.50772062499993,
+      "latency_p50_ms": 403.634152,
+      "latency_p95_ms": 443.518687,
+      "mrr": 0.890625,
+      "recall_at_1": 0.7291666666666667,
+      "recall_at_3": 0.875,
+      "recall_at_5": 0.875,
+      "warm_latency_p50_ms": 382.179097,
+      "warm_latency_p95_ms": 424.918646,
+      "warm_samples": 24
+    }
+  },
+  "resources": {
+    "index_ms": 466.773836,
+    "indexed_memories": 16,
+    "peak_rss_kib": 325476,
+    "ranking_revision": "owner-rrf-v2",
+    "sqlite_bytes_including_wal_shm": 3666616
+  },
+  "scale_workload": {
+    "records": 100,
+    "chunks": 100,
+    "index_ms": 2712.63,
+    "embedding_p50_ms": 24.433,
+    "embedding_p95_ms": 24.7834,
+    "disk_bytes_total": 5226240,
+    "peak_rss_kib": 327012,
+    "vector_count": 100,
+    "embedding_count": 100,
+    "token_count": null,
+    "token_count_reason": "provider_usage_exposes_no_tokenizer_count"
+  },
+  "governed_policy": {
+    "audit_id": "audit_65be3f32aaf86c17d3ea1b74e374d",
+    "evidence_uri": "test://supplemental/policy-owner/cache-resolution",
+    "indexer_steps_after_resolution": 0,
+    "modes": {
+      "bm25": {
+        "frozen_dense_candidate_revalidated": null,
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-build-toolchain",
+          "alpha-apply-review-symbol",
+          "alpha-code-index-freshness",
+          "alpha-multi-hop-decision",
+          "alpha-retry-recovery",
+          "alpha-current-branch-policy",
+          "alpha-review-atomicity",
+          "alpha-retry-incident"
+        ],
+        "replacement_injected": true,
+        "stale_capture_revalidated": true,
+        "superseded_injected": false
+      },
+      "bm25_dense": {
+        "frozen_dense_candidate_revalidated": true,
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-code-index-freshness",
+          "alpha-apply-review-symbol",
+          "alpha-multi-hop-decision",
+          "alpha-review-atomicity",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-review-preview-token"
+        ],
+        "replacement_injected": true,
+        "stale_capture_revalidated": true,
+        "superseded_injected": false
+      },
+      "bm25_graph": {
+        "frozen_dense_candidate_revalidated": null,
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-code-index-freshness",
+          "alpha-current-branch-policy",
+          "alpha-multi-hop-decision",
+          "alpha-apply-review-symbol",
+          "alpha-retry-recovery",
+          "alpha-build-toolchain",
+          "alpha-retry-incident",
+          "alpha-review-atomicity"
+        ],
+        "replacement_injected": true,
+        "stale_capture_revalidated": true,
+        "superseded_injected": false
+      },
+      "combined": {
+        "frozen_dense_candidate_revalidated": true,
+        "injected_labels": [
+          "alpha-cache-policy-new",
+          "alpha-code-index-freshness",
+          "alpha-apply-review-symbol",
+          "alpha-multi-hop-decision",
+          "alpha-review-atomicity",
+          "alpha-current-branch-policy",
+          "alpha-build-toolchain",
+          "alpha-retry-recovery",
+          "alpha-retry-incident",
+          "alpha-review-preview-token"
+        ],
+        "replacement_injected": true,
+        "stale_capture_revalidated": true,
+        "superseded_injected": false
+      }
+    },
+    "old_vector_excluded_after": true,
+    "old_vector_verified_before": true,
+    "pending_jobs_after_resolution": 1,
+    "relationship_id": "edge_65be3f32aa2ad319effd9000d0f8c",
+    "revisions_after": 1,
+    "revisions_before": 0,
+    "scenario": "explicit_policy_supersession"
+  }
+}

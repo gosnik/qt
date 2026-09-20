@@ -1,0 +1,42 @@
+{
+  "ollama": {
+    "instances": [
+      {
+        "id": "desk",
+        "name": "Desk",
+        "baseUrl": "http://desk:11434",
+        "enabled": true,
+        "timeoutMs": 120000,
+        "models": [
+          {
+            "name": "team/model:7b",
+            "digest": "desk-digest",
+            "size": 42,
+            "capabilities": ["completion", "tools"],
+            "contextWindow": 65536,
+            "maxTokens": 16384,
+            "details": {"family": "llama"}
+          }
+        ]
+      },
+      {
+        "id": "gpu",
+        "name": "GPU",
+        "baseUrl": "https://gpu.example/v1/",
+        "enabled": true,
+        "timeoutMs": 90000,
+        "models": [
+          {
+            "name": "team/model:7b",
+            "digest": "gpu-digest",
+            "size": 84,
+            "capabilities": ["completion", "vision", "thinking"],
+            "contextWindow": 131072,
+            "maxTokens": 16384,
+            "details": {"family": "llama"}
+          }
+        ]
+      }
+    ]
+  }
+}

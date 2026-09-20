@@ -1,0 +1,16 @@
+{
+  "name": "angelscript",
+  "version": "2.38.0+qt.vendored",
+  "build": {
+    "srcFilter": [
+      "+<*.cpp>",
+      "-<*.S>",
+      "-<*.asm>"
+    ],
+    "flags": [
+      "-DANGELSCRIPT_EXPORT",
+      "-D_LIB",
+      "-w"
+    ]
+  }
+}

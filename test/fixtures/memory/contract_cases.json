@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "source": {
+    "repository": "qtmem",
+    "commit": "3324ace"
+  },
+  "scopes": {
+    "alpha": {
+      "user": "user-1",
+      "project": "project-alpha",
+      "repository": "repo-alpha",
+      "branch": "main",
+      "session": "session-alpha"
+    },
+    "beta": {
+      "user": "user-1",
+      "project": "project-beta",
+      "repository": "repo-beta",
+      "branch": "main",
+      "session": "session-beta"
+    }
+  },
+  "memories": [
+    {
+      "fixture_id": "validated-build",
+      "scope": "alpha",
+      "type": "decision",
+      "status": "validated",
+      "content": "Native builds use PlatformIO and C++17.",
+      "confidence": 0.95,
+      "source_type": "file",
+      "source_uri": "AGENTS.md",
+      "source_hash": "hash-agents-v1",
+      "tags": ["build", "native"]
+    },
+    {
+      "fixture_id": "stale-build",
+      "scope": "alpha",
+      "type": "decision",
+      "status": "deprecated",
+      "content": "Native builds use CMake and C++14.",
+      "confidence": 0.9,
+      "source_type": "file",
+      "source_uri": "old-build.md",
+      "source_hash": "hash-old-build",
+      "tags": ["build", "native"]
+    },
+    {
+      "fixture_id": "hypothesis-memory",
+      "scope": "alpha",
+      "type": "hypothesis",
+      "status": "hypothesis",
+      "content": "A clean rebuild may fix the linker failure.",
+      "confidence": 0.45,
+      "source_type": "chat",
+      "source_uri": "session://alpha/1",
+      "source_hash": "hash-chat-1",
+      "tags": ["linker", "review"]
+    },
+    {
+      "fixture_id": "other-project",
+      "scope": "beta",
+      "type": "decision",
+      "status": "validated",
+      "content": "Native builds use Meson.",
+      "confidence": 0.99,
+      "source_type": "file",
+      "source_uri": "README.md",
+      "source_hash": "hash-beta-readme",
+      "tags": ["build", "native"]
+    }
+  ],
+  "recall_cases": [
+    {
+      "name": "validated exact-scope recall",
+      "scope": "alpha",
+      "query": "How do native builds compile?",
+      "policy": "balanced",
+      "budget_tokens": 128,
+      "required_fixture_ids": ["validated-build"],
+      "forbidden_fixture_ids": ["stale-build", "other-project"]
+    },
+    {
+      "name": "hypothesis is visibly untrusted",
+      "scope": "alpha",
+      "query": "linker failure clean rebuild",
+      "policy": "exploratory",
+      "budget_tokens": 128,
+      "required_fixture_ids": ["hypothesis-memory"],
+      "required_warning_codes": ["untrusted_lifecycle"],
+      "forbidden_fixture_ids": ["other-project"]
+    }
+  ],
+  "lifecycle_cases": [
+    {
+      "from": "hypothesis",
+      "to": "validated",
+      "has_evidence": false,
+      "allowed": false
+    },
+    {
+      "from": "hypothesis",
+      "to": "validated",
+      "has_evidence": true,
+      "allowed": true
+    },
+    {
+      "from": "validated",
+      "to": "superseded",
+      "has_replacement": false,
+      "allowed": false
+    },
+    {
+      "from": "validated",
+      "to": "superseded",
+      "has_replacement": true,
+      "allowed": true
+    }
+  ],
+  "round_trip_required_collections": [
+    "memories",
+    "tags",
+    "graph_edges",
+    "procedure_runs",
+    "memory_revisions",
+    "sources",
+    "source_events",
+    "review_items",
+    "audit_events",
+    "session_events"
+  ],
+  "future_schema": {
+    "supported_version": 3,
+    "input_version": 999,
+    "must_reject_without_writes": true
+  },
+  "prehandler": {
+    "logical_input_sequence": 7,
+    "allowed_memory_fixture_ids": ["validated-build", "hypothesis-memory"],
+    "forbidden_memory_fixture_ids": ["stale-build", "other-project"],
+    "max_context_tokens": 128,
+    "required_warning_codes": ["untrusted_lifecycle"]
+  }
+}

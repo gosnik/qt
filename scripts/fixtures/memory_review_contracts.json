@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "list": {
+    "items": [
+      {
+        "id": "review_fixture_conflict",
+        "kind": "conflict",
+        "status": "pending",
+        "priority": "urgent",
+        "summary": "Two active constraints disagree",
+        "scope": {"project": "qt", "repository": "qt", "branch": "main"},
+        "risk": {"class": "critical", "score": 100, "reasons": ["critical conflict"]},
+        "created_at": "2026-07-22T00:00:00Z"
+      }
+    ],
+    "page": {"limit": 20, "next_cursor": null},
+    "counts": {"pending": 1, "urgent": 1, "due": 0}
+  },
+  "detail": {
+    "review": {
+      "id": "review_fixture_conflict",
+      "kind": "conflict",
+      "status": "pending",
+      "revision": 3,
+      "candidate": {
+        "version": 1,
+        "kind": "conflict",
+        "payload": {"left_id": "mem_left", "right_id": "mem_right"}
+      }
+    },
+    "subject": {"id": "mem_left", "content": "Use the native index."},
+    "sources": [{"id": "mem_right", "excerpt": "Use text search only."}],
+    "related": [],
+    "warnings": ["critical unresolved conflict"],
+    "recall_impact": {"strict": false, "balanced": false, "exploratory": true}
+  },
+  "preview": {
+    "review_id": "review_fixture_conflict",
+    "review_revision": 3,
+    "action": {"kind": "keep_both_with_warning"},
+    "effects": {
+      "memory_writes": [],
+      "memory_updates": [],
+      "graph_changes": [{"type": "contradicts", "from": "mem_left", "to": "mem_right"}],
+      "lifecycle_changes": []
+    },
+    "warnings": ["Neither memory becomes validated."],
+    "will_not": ["delete either memory", "treat model output as evidence"],
+    "required_authority": "human",
+    "idempotency_token": "preview_fixture_token"
+  },
+  "result": {
+    "review_id": "review_fixture_conflict",
+    "decision_persisted": true,
+    "applied": true,
+    "idempotent_replay": false,
+    "application_status": "applied",
+    "changed_ids": ["edge_fixture"],
+    "audit_event_ids": ["audit_fixture_action", "audit_fixture_graph"]
+  },
+  "history": {
+    "items": [
+      {
+        "review_id": "review_fixture_conflict",
+        "action": "keep_both_with_warning",
+        "actor": "user:fixture",
+        "note": "Both constraints are environment-specific.",
+        "application_status": "applied",
+        "created_at": "2026-07-22T00:01:00Z"
+      }
+    ],
+    "page": {"limit": 20, "next_cursor": null}
+  },
+  "batch_result": {
+    "idempotency_token": "batch_fixture_token",
+    "results": [
+      {"review_id": "review_fixture_a", "applied": true},
+      {"review_id": "review_fixture_b", "applied": false, "error": {"code": "stale_preview", "message": "Review changed after preview."}}
+    ],
+    "applied_count": 1,
+    "failed_count": 1,
+    "partial_failure": true
+  },
+  "errors": [
+    {"code": "review_not_found", "message": "Review was not found in the requested scope."},
+    {"code": "invalid_candidate", "message": "The legacy candidate payload cannot be decoded."},
+    {"code": "stale_preview", "message": "Review or subject changed after preview."},
+    {"code": "terminal_review", "message": "A terminal review must be explicitly reopened."},
+    {"code": "scope_denied", "message": "Review sources are outside the permitted scope."}
+  ]
+}

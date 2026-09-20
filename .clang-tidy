@@ -1,0 +1,15 @@
+Checks: >
+  -*,
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  modernize-make-unique,
+  modernize-use-emplace,
+  modernize-use-nullptr,
+  modernize-use-override,
+  readability-container-size-empty,
+  readability-redundant-*
+HeaderFilterRegex: '^(src|include)/'
+WarningsAsErrors: ''
+FormatStyle: none

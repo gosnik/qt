@@ -1,0 +1,32 @@
+.pio/
+.codex/
+.idea/
+reference/
+lib/boost_1_86_0/
+__pycache__/
+**/__pycache__/
+*.pyc
+compile_commands.json
+tmp/
+
+models/
+
+# Local credentials and runtime state (keep documented test fixtures tracked).
+/.env
+/.env.*
+!/.env.example
+/.pi/
+/.qt/
+/.qtindex/
+/.pytest_cache/
+/.cache/
+/.venv/
+/qt-debug.log
+
+# Editor and patch leftovers.
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+.DS_Store
