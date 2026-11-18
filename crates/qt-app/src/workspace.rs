@@ -7,7 +7,9 @@ mod history;
 mod panels;
 mod picker;
 mod slash;
+mod subsystems;
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -42,6 +44,7 @@ use crate::composer::{
     run_external_editor,
 };
 use crate::dialogs::{self, RunHandler, UiCallback};
+use crate::extensions::{ChromeEvent, ExtensionChrome};
 use crate::model_picker::{
     ModelItem, ThinkingItem, clamp_level, enabled_models, in_scope, levels_for,
 };
@@ -144,6 +147,11 @@ pub struct Workspace {
     shown_bash: Vec<BashExecutionMessage>,
     /// Mutations waiting for approval (`queue` policy).
     pending_mutations: usize,
+    /// Extension UI (dialogs, status, widgets, header/footer, shortcuts).
+    ext: Entity<ExtensionChrome>,
+    /// Runs started by extensions or subagent completions while another
+    /// run was being shown.
+    pending_runs: VecDeque<Receiver<AgentEvent>>,
     _event_task: Option<Task<()>>,
     _ticker: Option<Task<()>>,
     _editor_task: Option<Task<()>>,
@@ -170,6 +178,13 @@ impl Workspace {
             cx.new(|cx| SelectState::new(initial_items, selected, window, cx).searchable(true));
         let thinking_select =
             cx.new(|cx| SelectState::new(ThinkingItem::all(), Some(IndexPath::new(0)), window, cx));
+        let ext = ExtensionChrome::install(
+            cx.global::<crate::RuntimeGlobal>().0.clone(),
+            composer.clone(),
+            transcript.clone(),
+            window,
+            cx,
+        );
         let http = reqwest::Client::builder()
             .user_agent(concat!("qt/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(20))
@@ -221,6 +236,10 @@ impl Workspace {
                 },
             ),
             window.observe_window_appearance(|_, cx| theme::on_appearance_changed(cx)),
+            cx.subscribe_in(&ext, window, |this, _, event: &ChromeEvent, window, cx| {
+                this.on_chrome_event(event, window, cx)
+            }),
+            cx.observe(&ext, |_, _, cx| cx.notify()),
         ];
 
         let settings = engine.settings();
@@ -251,6 +270,8 @@ impl Workspace {
             bash: None,
             shown_bash: Vec::new(),
             pending_mutations: 0,
+            ext,
+            pending_runs: VecDeque::new(),
             _event_task: None,
             _ticker: None,
             _editor_task: None,
@@ -490,7 +511,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn run_finished(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn run_finished(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.running.is_none() {
             return;
         }
@@ -500,6 +521,7 @@ impl Workspace {
         self.sessions = self.engine.sessions();
         self.queue = self.conversation.queue();
         self.sync_entry_ids(cx);
+        self.next_pending_run(window, cx);
         cx.notify();
     }
 
@@ -726,6 +748,7 @@ impl Workspace {
         self._ticker = None;
         self.running = None;
         self.activity = None;
+        self.pending_runs.clear();
         self.queue = QueueSnapshot::default();
         if conversation.model().is_none()
             && let Some(model) = self.conversation.model()
@@ -1707,6 +1730,11 @@ impl Workspace {
                     .max_w(px(920.))
                     .gap_1p5()
                     .children(self.render_activity(cx))
+                    .children(
+                        self.ext
+                            .read(cx)
+                            .render_above_composer(self.running == Some(RunKind::Agent), cx),
+                    )
                     .children(self.render_queue(cx))
                     .child(
                         div()
@@ -1723,7 +1751,8 @@ impl Workspace {
                             }))
                             .child(self.render_composer_box(textarea, action, cx)),
                     )
-                    .child(self.render_status(cx)),
+                    .child(self.render_status(cx))
+                    .children(self.ext.read(cx).render_footer(cx)),
             )
     }
 
@@ -1857,6 +1886,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_tools_action))
             .on_action(cx.listener(Self::open_context_action))
             .on_action(cx.listener(Self::export_action))
+            .capture_key_down(cx.listener(Self::extension_shortcut))
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
@@ -1867,6 +1897,7 @@ impl Render for Workspace {
                     .min_w_0()
                     .h_full()
                     .child(self.render_header(cx))
+                    .children(self.ext.read(cx).render_header(cx))
                     .child(div().flex_1().min_h_0().map(|el| {
                         if empty {
                             el.child(self.render_welcome(cx))

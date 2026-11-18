@@ -84,18 +84,23 @@ impl Workspace {
         let cursor = self.composer_cursor(cx);
         self.completion_generation += 1;
         let Some(request) = detect(&text, cursor) else {
-            self.close_completion(cx);
+            // Extension autocomplete providers complete anything else.
+            match self.extension_completion(&text, cursor, None, cx) {
+                Some((request, items)) => self.show_completion(request, items, cx),
+                None => self.close_completion(cx),
+            }
             return;
         };
         match &request.kind {
             CompletionKind::SlashName => {
-                let items =
+                let mut items =
                     command_suggestions(&self.engine.slash_commands().commands, &request.query);
+                self.extension_completion(&text, cursor, Some((&request, &mut items)), cx);
                 self.show_completion(request, items, cx);
             }
             CompletionKind::SlashArgs { command } => {
                 let known = self.engine.slash_commands().find(command).is_some();
-                let items = if known {
+                let mut items = if known {
                     argument_suggestions(argument_completions(
                         &self.engine,
                         command,
@@ -104,8 +109,10 @@ impl Workspace {
                 } else {
                     Vec::new()
                 };
+                self.extension_completion(&text, cursor, Some((&request, &mut items)), cx);
                 self.show_completion(request, items, cx);
             }
+            CompletionKind::Extension => self.close_completion(cx),
             CompletionKind::Path { quoted } => {
                 let generation = self.completion_generation;
                 let cwd = self.engine.cwd().to_path_buf();
@@ -349,7 +356,11 @@ impl Workspace {
             );
             return false;
         }
-        let (text, images) = self.with_mentions(text, images, window, cx);
+        let Some((text, images)) = self.input_hooks(text, images, window, cx) else {
+            // An extension handled the input (or rejected it with a notice).
+            return true;
+        };
+        let (text, images) = self.with_mentions(&text, images, window, cx);
         if self.running == Some(RunKind::Agent) {
             let result = if follow_up {
                 self.conversation.follow_up(&text, images)
@@ -448,6 +459,7 @@ impl Workspace {
             CompletionKind::SlashName => "Commands".to_string(),
             CompletionKind::SlashArgs { command } => format!("/{command} arguments"),
             CompletionKind::Path { .. } => "Files".to_string(),
+            CompletionKind::Extension => "Suggestions".to_string(),
         };
         let mono = matches!(popup.request.kind, CompletionKind::Path { .. });
         let mut list = v_flex()

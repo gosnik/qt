@@ -25,6 +25,9 @@ pub enum CompletionKind {
     SlashArgs { command: String },
     /// `@path` / `@"path with spaces`: workspace paths.
     Path { quoted: bool },
+    /// Suggestions of extension autocomplete providers (`query` is the
+    /// provider prefix, replaced as typed).
+    Extension,
 }
 
 /// A completion request: the kind, the typed prefix and where it starts.
@@ -375,7 +378,7 @@ pub fn apply(
             let out = format!("{before}{} {after}", item.value);
             (out, start + item.value.len() + 1)
         }
-        CompletionKind::SlashArgs { .. } => {
+        CompletionKind::SlashArgs { .. } | CompletionKind::Extension => {
             let out = format!("{before}{}{after}", item.value);
             (out, start + item.value.len())
         }

@@ -110,6 +110,7 @@ impl Workspace {
                     return;
                 }
                 "export" if args.is_empty() => return self.prompt_export(window, cx),
+                "reload" => return self.reload_runtime(&line, window, cx),
                 "name" if args.is_empty() => {
                     return self.rename_session(&super::RenameSession, window, cx);
                 }
@@ -224,17 +225,14 @@ impl Workspace {
                     self.open_settings(&super::OpenSettings, window, cx);
                 }
             }
-            SlashAction::OpenPackageResources { kind, .. } => {
-                if kind == "themes" {
-                    self.open_theme_picker(window, cx);
-                } else {
-                    let what = match kind.as_str() {
-                        "extensions" => "The extensions panel",
-                        "skills" => "Skill package configuration",
-                        "prompts" => "Prompt package configuration",
-                        _ => "Package resource configuration",
-                    };
-                    self.card(line.to_string(), vec![unavailable_text(what)], false, cx);
+            SlashAction::OpenPackageResources { kind, filter } => {
+                if !self.open_package_resources(&kind, filter, window, cx) {
+                    self.card(
+                        line.to_string(),
+                        vec![unavailable_text("Package resource configuration")],
+                        false,
+                        cx,
+                    );
                 }
             }
             SlashAction::SelectModel { search } => {
@@ -270,6 +268,7 @@ impl Workspace {
                     let host = self.memory_host(cx);
                     crate::memory::run_slash(host, line.to_string(), arguments, window, cx)
                 }
+                other if self.open_subsystem(line, other, &arguments, window, cx) => {}
                 other => {
                     let what = match other {
                         "llama" => "The llama.cpp panel (/llama)",
@@ -281,12 +280,9 @@ impl Workspace {
                     self.card(line.to_string(), vec![unavailable_text(what)], false, cx);
                 }
             },
-            SlashAction::Extension { name, .. } => self.card(
-                line.to_string(),
-                vec![unavailable_text(&format!("Extension command /{name}"))],
-                false,
-                cx,
-            ),
+            SlashAction::Extension {
+                name, arguments, ..
+            } => self.run_extension_command(name, arguments, cx),
             SlashAction::Quit => cx.quit(),
         }
     }

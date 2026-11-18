@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
@@ -14,8 +15,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use qt_core::AgentEvent;
 use qt_core::message::{
-    AgentMessage, AssistantMessage, BashExecutionMessage, ContentBlock, Message, StopReason,
-    ToolResultMessage, UserContent,
+    AgentMessage, AssistantMessage, BashExecutionMessage, ContentBlock, CustomMessage, Message,
+    StopReason, ToolResultMessage, UserContent,
 };
 use qt_core::provider::StreamEvent;
 use serde_json::Value;
@@ -102,6 +103,10 @@ pub enum TranscriptEvent {
 
 impl EventEmitter<TranscriptEvent> for Transcript {}
 
+/// Renders displayed custom messages (extension message renderers):
+/// `Some(lines)` replaces the default rendering.
+pub type CustomRenderer = Rc<dyn Fn(&CustomMessage) -> Option<Vec<String>>>;
+
 pub struct Transcript {
     items: Vec<Item>,
     scroller: Entity<MessageScrollerState>,
@@ -113,6 +118,11 @@ pub struct Transcript {
     hide_thinking: bool,
     next_bash_id: u64,
     _observers: Vec<Subscription>,
+    custom_renderer: Option<CustomRenderer>,
+    /// Extension `setHiddenThinkingLabel`.
+    hidden_thinking_label: Option<SharedString>,
+    /// Extension `setToolsExpanded`: tool cards start expanded.
+    tools_expanded: bool,
 }
 
 impl Transcript {
@@ -126,7 +136,39 @@ impl Transcript {
             hide_thinking: false,
             next_bash_id: 0,
             _observers: Vec::new(),
+            custom_renderer: None,
+            hidden_thinking_label: None,
+            tools_expanded: false,
         }
+    }
+
+    /// Render displayed custom messages with `renderer` first.
+    pub fn set_custom_renderer(&mut self, renderer: Option<CustomRenderer>) {
+        self.custom_renderer = renderer;
+    }
+
+    /// Label of collapsed or hidden thinking (`None` restores the default).
+    pub fn set_hidden_thinking_label(&mut self, label: Option<String>, cx: &mut Context<Self>) {
+        self.hidden_thinking_label = label.map(SharedString::from);
+        cx.notify();
+    }
+
+    pub fn tools_expanded(&self) -> bool {
+        self.tools_expanded
+    }
+
+    /// Expand (or collapse) every tool card; new cards follow.
+    pub fn set_tools_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        self.tools_expanded = expanded;
+        for item in &mut self.items {
+            if let Item::Tool(tool) = item {
+                tool.expanded = expanded || tool.status == ToolStatus::Failed;
+            }
+        }
+        let count = self.items.len();
+        self.scroller
+            .update(cx, |s, cx| s.remeasure_items(0..count, cx));
+        cx.notify();
     }
 
     /// Show slash command output as a card at the end of the transcript.
@@ -355,7 +397,12 @@ impl Transcript {
                 });
             }
             AgentMessage::Custom(c) if c.display => {
-                let state = self.markdown_state(&c.content.plain_text(), cx);
+                let rendered = self.custom_renderer.as_ref().and_then(|r| r(c));
+                let text = match rendered {
+                    Some(lines) => card_markdown(&lines),
+                    None => c.content.plain_text(),
+                };
+                let state = self.markdown_state(&text, cx);
                 self.items.push(Item::Custom {
                     custom_type: c.custom_type.clone().into(),
                     state,
@@ -469,7 +516,7 @@ impl Transcript {
             output: String::new(),
             diff: None,
             images: 0,
-            expanded: false,
+            expanded: self.tools_expanded,
         }));
         self.tool_items.insert(id.to_string(), self.items.len() - 1);
     }
@@ -499,7 +546,7 @@ impl Transcript {
             .and_then(Value::as_str)
             .filter(|d| !d.is_empty())
             .map(str::to_string);
-        tool.expanded = result.is_error;
+        tool.expanded = result.is_error || self.tools_expanded;
     }
 
     fn markdown_state(&mut self, text: &str, cx: &mut Context<Self>) -> Entity<TextViewState> {
@@ -620,10 +667,10 @@ impl Transcript {
             } => {
                 let hidden = self.hide_thinking;
                 let expanded = *expanded && !hidden;
-                let label = if *streaming || hidden {
-                    "Thinking…"
-                } else {
-                    "Thought process"
+                let label: SharedString = match &self.hidden_thinking_label {
+                    Some(custom) if hidden || !expanded => custom.clone(),
+                    _ if *streaming || hidden => "Thinking…".into(),
+                    _ => "Thought process".into(),
                 };
                 v_flex()
                     .w_full()

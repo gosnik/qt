@@ -140,3 +140,84 @@ fn interactive_runtimes_bind_new_conversations_and_respect_flags() {
             .starts_with("unknown model selection: nothing-like-this")
     );
 }
+
+#[test]
+fn package_skills_load_toggle_and_reload() {
+    use qt_runtime::qt_extensions::packages::ResourceKind;
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("pkg");
+    std::fs::create_dir_all(pkg.join("skills/review")).unwrap();
+    std::fs::write(
+        pkg.join("skills/review/SKILL.md"),
+        "---\nname: pkg-review\ndescription: Review from a package\n---\nbody",
+    )
+    .unwrap();
+    let (_root, home, work) = setup(json!({"packages": [pkg.to_string_lossy()]}));
+    let mut opts = options(&home, &work, RunMode::Print);
+    opts.no_memory = true;
+    let runtime = Runtime::build(opts).unwrap();
+    let has_skill = |runtime: &Runtime| {
+        runtime
+            .engine()
+            .resources()
+            .skills
+            .skills
+            .iter()
+            .any(|s| s.name == "pkg-review")
+    };
+    assert!(has_skill(&runtime), "package skills are discovered");
+    let items = runtime
+        .package_resource_items(ResourceKind::Skills)
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].enabled && items[0].can_toggle);
+    assert_eq!(
+        runtime.toggle_package_resource(&items[0], false).unwrap(),
+        "Disabled skills pkg-review."
+    );
+    runtime.reload();
+    assert!(!has_skill(&runtime), "disabled after reload");
+    let items = runtime
+        .package_resource_items(ResourceKind::Skills)
+        .unwrap();
+    assert!(!items[0].enabled);
+
+    // A run sink can be installed and re-binds the active conversation.
+    let conversation = runtime.engine().new_ephemeral_conversation(None);
+    runtime.attach(&conversation, AttachOptions::default());
+    runtime.set_run_sink(Some(std::sync::Arc::new(|_events| {})));
+    assert_eq!(
+        runtime.active_conversation().unwrap().session_id(),
+        conversation.session_id()
+    );
+    runtime.shutdown(Duration::from_secs(5));
+}
+
+#[test]
+fn subsystem_commands_answer_without_panels() {
+    let (_dir, home, work) = setup(json!({}));
+    let mut opts = options(&home, &work, RunMode::Print);
+    opts.no_memory = true;
+    let runtime = Runtime::build(opts).unwrap();
+    let conversation = runtime.engine().new_ephemeral_conversation(None);
+    let run = |command: &str, args: &str| {
+        let inner = runtime.clone();
+        let conversation = conversation.clone();
+        let (command, args) = (command.to_string(), args.to_string());
+        runtime
+            .engine()
+            .block_on(async move {
+                inner
+                    .run_subsystem_command(&conversation, &command, &args)
+                    .await
+            })
+            .lines
+    };
+    assert_eq!(run("mcp", "status")[2], "No MCP servers configured");
+    assert_eq!(run("mcp", "setup")[0], "MCP config paths:");
+    assert_eq!(run("llama", "models"), ["No llama models are configured."]);
+    assert_eq!(run("llama", "select nope"), ["llama model not found: nope"]);
+    assert_eq!(run("index", "bogus")[0], "unknown index command: bogus");
+    assert_eq!(run("index", "status")[0], "index status");
+    runtime.shutdown(Duration::from_secs(5));
+}
