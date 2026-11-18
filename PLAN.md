@@ -77,7 +77,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [ ] Auth: OAuth PKCE login with localhost callback (anthropic, openai-codex), token refresh *(gap in C++)*, `/login` `/logout` GUI, env-var table (~28 providers), legacy auth.json shapes, `--api-key`.
 - [x] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
 - [ ] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`.
-- [ ] In-process llama.cpp via a `qt-llama-sys` crate (library complete in `qt-llama`; needs provider dispatch, model picker, `--discover-local-models`, `/llama` panel) building the PrismML fork submodule (needed for Q2_0): settings.llama (backend, context, generation, kvCache, grammar, embeddings, models), GPU offload planning, GGUF discovery and classification, `--discover-local-models`, tool-call parsing, embeddings, `/llama` panel.
+- [x] In-process llama.cpp via a `qt-llama-sys` crate building the PrismML fork (Vulkan/CPU verified on Linux 2026-11-18: discovery, contextWindow, GPU offload, generation through qt-cli); settings.llama, offload planning, GGUF discovery, tool-call parsing, embeddings, `/llama` panel.
 
 ## Milestone 5: Tools
 
@@ -96,7 +96,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] C/C++ code index (classes, methods, functions, call graph) and tree-sitter metadata.
 - [x] Model tools: symbol, analyze_file, references, build_context, search_index, `index` router.
 - [x] Router operation groups: core, code, fs, git, build. (Decision 2026-11-18: serial, debug, rtos, fetch and util groups are not ported.)
-- [ ] `/index` panel.
+- [x] `/index` panel.
 
 ## Milestone 7: Subagents and MCP
 
@@ -108,7 +108,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 ## Milestone 8: Modes and CLI
 
 - [x] JSON event mode (`--mode json`), Pi event shapes, exit codes.
-- [ ] RPC mode (all commands and events, extension UI requests).
+- [x] RPC mode (all commands and events, extension UI requests).
 - [x] Full CLI flag set (model, thinking, tools, skills/templates/themes toggles, `--no-context-files`, `--list-models` table, `--export`, `--offline`, logging flags/env).
 - [x] Subcommands: `install/remove/update/list` packages, `config`, `memory`.
 - [x] Startup migrations (oauth.json, sessions dir, tools→bin, commands→prompts).
@@ -126,8 +126,8 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] Discovery (`-e`, `.pi/extensions`, agent home, packages with filters), manifest v1, `package.json` `pi.extensions`.
 - [x] Rhai script runtime (decision 2026-11-18, replaces AngelScript; `.rhai` files) with the same host API (`pi.*`, `ctx.*`), lifecycle events, commands, tools, flags, providers, resources, step budget and source limits.
 - [x] Subprocess JSON-RPC transport.
-- [ ] `ctx.ui.*` dialogs and status/widgets/header/footer/working indicator mapped to GPUI; message renderers, shortcuts, autocomplete providers, custom components.
-- [ ] `/extensions`, `/skills`, `/prompts`, `/themes` package toggles; `/reload`.
+- [x] `ctx.ui.*` dialogs and status/widgets/header/footer/working indicator mapped to GPUI; message renderers, shortcuts, autocomplete providers, custom components.
+- [x] `/extensions`, `/skills`, `/prompts`, `/themes` package toggles; `/reload`.
 
 ## Milestone 11: Governed memory
 
@@ -139,7 +139,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [ ] Dreaming, web research, auto_validate verifier.
 - [x] Skill import, offline qtmem import, export/prune/scrub.
 - [ ] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions.
-- [ ] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).
+- [x] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).
 
 ## Platform
 
