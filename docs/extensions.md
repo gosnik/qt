@@ -205,7 +205,10 @@ Message `content` is a string or an array of `#{type: "text", text}` and
 
 `timeout` is in milliseconds; an empty submitted string is distinct from
 cancellation. Dialogs block the extension until the user answers, so front ends
-run commands off their UI thread.
+run commands off their UI thread. In `qt-cli --mode rpc` dialogs and the
+fire-and-forget methods become `extension_ui_request` lines answered by
+`extension_ui_response` frames (Pi's RPC sub-protocol; see
+`docs/upstream-compatibility.md`).
 
 **Components** (`custom`, `setEditorComponent`): the handler receives
 `#{type: "render", width, height}` and returns `#{lines: [...]}`; key input
