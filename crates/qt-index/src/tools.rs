@@ -463,16 +463,16 @@ pub struct DirectIndexTool {
 }
 
 const SYMBOL_GUIDELINES: &[&str] = &[
-    "For C/C++ class, function, method, definition, or identifier lookup, call symbol first. Use grep for literal text, regex, or languages not covered by the C/C++ index.",
+    "For C/C++, Rust and TypeScript/JavaScript type, function, method, definition, or identifier lookup, call symbol first. Use grep for literal text, regex, or languages not covered by the code index.",
 ];
 const ANALYZE_GUIDELINES: &[&str] = &[
-    "Use analyze_file for a known file's indexed C/C++ structure and call edges; verify important results against current source.",
+    "Use analyze_file for a known file's indexed structure and call edges; verify important results against current source.",
 ];
 const REFERENCES_GUIDELINES: &[&str] = &[
-    "Use references for approximate indexed C/C++ callers and callees; verify material edges against current source.",
+    "Use references for approximate indexed callers and callees; verify material edges against current source.",
 ];
 const BUILD_CONTEXT_GUIDELINES: &[&str] = &[
-    "Use build_context for a C/C++ file's compiler flags, definitions, include paths, and resolved include edges.",
+    "Use build_context for a C/C++ file's compiler flags, definitions, include paths, and resolved include edges, or the build command of a Rust or TypeScript file.",
 ];
 const SEARCH_INDEX_GUIDELINES: &[&str] = &[
     "Use search_index for ranked persisted repository text, and grep for regexes, unsupported languages, or freshly changed text.",
@@ -480,14 +480,14 @@ const SEARCH_INDEX_GUIDELINES: &[&str] = &[
 const SCHEMA_RETRY_GUIDELINE: &str = "Match each tool's advertised JSON schema exactly. If a tool returns invalid_arguments with retryable=true, correct the listed fields and retry the call.";
 const ROUTER_GUIDELINES_WITH_SYMBOL: &[&str] = &[SCHEMA_RETRY_GUIDELINE];
 const ROUTER_GUIDELINES: &[&str] = &[
-    "For C/C++ symbol navigation, prefer index with action=call and operation=code.symbol over grep; put operation at the top level and the symbol name inside arguments.",
+    "For symbol navigation, prefer index with action=call and operation=code.symbol over grep; put operation at the top level and the symbol name inside arguments.",
     SCHEMA_RETRY_GUIDELINE,
 ];
 
 fn symbol_schema() -> Value {
     object_schema(
         json!({
-            "name": { "type": "string", "minLength": 1, "description": "C/C++ identifier or qualified symbol name." },
+            "name": { "type": "string", "minLength": 1, "description": "Identifier or qualified symbol name (Foo::bar, crate::mod::Type, Store.save)." },
             "file": { "type": "string", "description": "Optional project-relative file filter." },
             "kind": { "type": "string", "description": "Optional symbol kind filter such as function or method." },
             "context": { "type": "boolean", "description": "Include source lines around each match." },
@@ -524,7 +524,7 @@ fn references_schema() -> Value {
 fn build_context_schema() -> Value {
     object_schema(
         json!({
-            "file": { "type": "string", "minLength": 1, "description": "Project-relative C/C++ source or header file." },
+            "file": { "type": "string", "minLength": 1, "description": "Project-relative source or header file." },
             "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum entries or include edges." }
         }),
         &["file"],
@@ -547,8 +547,8 @@ impl DirectIndexTool {
         Self {
             manager,
             name: "symbol",
-            description: "Find C/C++ class, function, or method definitions by identifier using the project code index. Prefer this over grep for symbol lookup. Example: {\"name\":\"ToolRegistry::prepare_request\",\"context\":true}.",
-            snippet: "Find C/C++ definitions with the project code index",
+            description: "Find C/C++, Rust and TypeScript/JavaScript type, function, or method definitions by identifier using the project code index. Prefer this over grep for symbol lookup. Example: {\"name\":\"ToolRegistry::prepare_request\",\"context\":true}.",
+            snippet: "Find code definitions with the project code index",
             guidelines: SYMBOL_GUIDELINES,
             schema: symbol_schema,
             payload: symbol_tool_payload,
@@ -559,7 +559,7 @@ impl DirectIndexTool {
         Self {
             manager,
             name: "analyze_file",
-            description: "Analyze one project-relative source file with the code index. Returns its C/C++ classes, functions, line statistics, and approximate incoming and outgoing call edges.",
+            description: "Analyze one project-relative source file with the code index. Returns its types, functions, line statistics, and approximate incoming and outgoing call edges.",
             snippet: "Analyze indexed symbols and calls in one source file",
             guidelines: ANALYZE_GUIDELINES,
             schema: analyze_file_schema,
@@ -571,8 +571,8 @@ impl DirectIndexTool {
         Self {
             manager,
             name: "references",
-            description: "Trace approximate indexed C/C++ callers and callees for a function or method. Prefer this over text search for call impact analysis, then verify important edges in source.",
-            snippet: "Trace indexed C/C++ callers and callees",
+            description: "Trace approximate indexed callers and callees for a function or method. Prefer this over text search for call impact analysis, then verify important edges in source.",
+            snippet: "Trace indexed callers and callees",
             guidelines: REFERENCES_GUIDELINES,
             schema: references_schema,
             payload: references_payload,
@@ -595,7 +595,7 @@ impl DirectIndexTool {
         Self {
             manager,
             name: "search_index",
-            description: "Search the persisted project full-text index. Use for broad repository concepts and known text; use symbol for C/C++ identifiers and grep for regexes or freshly changed text.",
+            description: "Search the persisted project full-text index. Use for broad repository concepts and known text; use symbol for code identifiers and grep for regexes or freshly changed text.",
             snippet: "Search the persisted project full-text index",
             guidelines: SEARCH_INDEX_GUIDELINES,
             schema: search_index_schema,
@@ -984,7 +984,7 @@ const OPERATIONS: &[OperationSpec] = &[
         "code",
         "classes",
         "index_classes",
-        "List indexed C++ classes.",
+        "List indexed types: C/C++ classes, Rust structs, enums and traits, TypeScript classes, interfaces and types.",
         &[
             "name",
             "qualified_name",
@@ -992,6 +992,7 @@ const OPERATIONS: &[OperationSpec] = &[
             "path",
             "path_prefix",
             "path_contains",
+            "kind",
             "limit",
         ],
         &[],
@@ -1000,7 +1001,7 @@ const OPERATIONS: &[OperationSpec] = &[
         "code",
         "functions",
         "index_functions",
-        "List indexed C/C++ functions and methods.",
+        "List indexed functions and methods.",
         &[
             "name",
             "qualified_name",
@@ -1017,7 +1018,7 @@ const OPERATIONS: &[OperationSpec] = &[
         "code",
         "callgraph",
         "index_callgraph",
-        "List approximate C/C++ call graph edges.",
+        "List approximate call graph edges.",
         &[
             "caller",
             "callee",
@@ -1115,7 +1116,7 @@ fn parameter_schema(parameters: &[&str], required: &[&str]) -> Value {
                 | "from_timestamp"
         );
         let description = match *name {
-            "name" => "C/C++ class, function, method, or qualified symbol name.".to_string(),
+            "name" => "Type, function, method, or qualified symbol name.".to_string(),
             "pattern" => "Text or regular-expression search pattern.".to_string(),
             "file" => "Project-relative file path.".to_string(),
             "context" => "Include source context around each symbol match.".to_string(),
@@ -1376,7 +1377,7 @@ impl Tool for IndexRouterTool {
         "index"
     }
     fn description(&self) -> String {
-        "Discover and invoke grouped project index, code, filesystem, git, and build operations. Prefer the direct symbol tool for C/C++ definitions. For other calls use, for example, action=call, operation=code.callgraph, arguments={...}; use action=tree only when the operation is unknown.".into()
+        "Discover and invoke grouped project index, code, filesystem, git, and build operations. Prefer the direct symbol tool for code definitions. For other calls use, for example, action=call, operation=code.callgraph, arguments={...}; use action=tree only when the operation is unknown.".into()
     }
     fn snippet(&self) -> &'static str {
         "Discover and invoke grouped in-process project index operations"

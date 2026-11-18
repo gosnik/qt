@@ -136,9 +136,9 @@ Built-in Tool Names:
   grep   - Search file contents
   find   - Find files by glob pattern
   ls     - List directory contents
-  symbol - Find C/C++ definitions with the project code index
+  symbol - Find code definitions with the project code index
   analyze_file - Analyze indexed symbols and calls in one source file
-  references - Trace indexed C/C++ callers and callees
+  references - Trace indexed callers and callees
   build_context - Show per-file compiler flags and include edges
   search_index - Search the persisted project full-text index
   index  - Discover and invoke grouped in-process project index operations

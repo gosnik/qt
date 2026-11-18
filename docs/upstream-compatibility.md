@@ -363,6 +363,37 @@ Ported from the archived `index` subsystem and `tools/index_tool.cpp`.
   Code-recall lexical matches follow the archived `retrieval_search`: exact name,
   qualified-name or path matches, then the file nodes of `index_fts` matches pinned to the
   snapshot generation (at most 32 quoted words joined by `OR`).
+- **Rust and TypeScript/JavaScript (qt extension, 2026-11-18):** the archived index
+  covered only C/C++. `.rs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs`
+  files (`javascript_source` is a new file kind) are parsed with `tree-sitter-rust` and
+  `tree-sitter-typescript` (TSX grammar for `.tsx` and JavaScript) into the same
+  `classes` / `methods` / `functions` / `call_graph` tables, so `symbol`, `analyze_file`,
+  `references`, `code.*` operations and memory code recall work across languages.
+  - Rust: `struct` / `enum` / `union` / `trait` / `type` items; `fn` items, with `impl` and
+    trait methods qualified `crate::module::Type::method` (crate name from the nearest
+    `Cargo.toml`, module path from the file path; `crate::` / `self::` / `super::` impl
+    paths resolved) and attached to their type across files.
+  - TypeScript/JavaScript: `class`, `interface`, `enum` and `type` declarations; function
+    declarations, class methods, and top-level or class-field arrow functions, qualified
+    with `.` by namespace and class (`Store.save`). Overload signatures and getter/setter
+    pairs are listed once per class.
+  - Calls inside function bodies (closures and nested functions belong to the enclosing
+    function) are recorded as written: `helper`, `Foo::new`, `Config.read`, or the method
+    name for a call on a value.
+  - `node_modules`, `target`, `dist`, `coverage`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`
+    and `.output` at any depth, minified/bundled files and files over 2 MiB are skipped.
+  - Per-file results are cached by content hash, so rescans reparse only changed files.
+  - Tree files are written for these languages too; the manifest adds a per-file
+    `language` and `tree_sitter_languages`.
+  - Type rows carry a `kind` (`classes.kind`, default `class`), shown as `kind` in class
+    JSON, `symbol_kind` in `symbol` results and filterable in `code.classes`. Stores
+    without the column load as `class` and gain it on the next save.
+  - Call-path matching (`references`, `code.trace_call_path`, incoming calls in
+    `analyze_file`, `code.dead_code`) treats `::` and `.` as qualifiers and matches in both
+    directions, so a qualified query such as `crate::m::helper` finds callers that wrote
+    `helper`. The archived matcher only matched a query that was a suffix of the recorded
+    name.
+  - Vue single-file components are not parsed.
 - **Fixes:** `.gitignore` rules are re-read on every scan (the archived matcher cached them
   for the life of the process); an FTS5 syntax error now surfaces as
   `invalid FTS5 query: ...` instead of silently returning no matches; scans triggered by

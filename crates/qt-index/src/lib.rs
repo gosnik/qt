@@ -3,8 +3,9 @@
 //! A port of the archived C++ `index` subsystem: a background service that
 //! scans the project (gitignore-aware), derives build metadata from CMake,
 //! Make, Ninja, qmake, waf and PlatformIO projects, writes
-//! `compile_commands.json`, builds a heuristic C/C++ code index and
-//! tree-sitter C++ metadata, and persists everything to SQLite with an FTS5
+//! `compile_commands.json`, builds a heuristic C/C++ code index, a
+//! tree-sitter code index for Rust, TypeScript and JavaScript, and
+//! tree-sitter metadata for all of them, and persists everything to SQLite with an FTS5
 //! table under `<agent_home>/index/<hash>/index.sqlite3`.
 //!
 //! The model reaches it through six tools ([`tools::index_tools`]): `symbol`,
@@ -26,11 +27,13 @@ pub mod cancel;
 pub mod code_index;
 pub mod compdb;
 pub mod gitignore;
+pub mod grammar;
 pub mod ops;
 pub mod scan;
 pub mod schema;
 pub mod service;
 pub mod store;
+pub mod syntax_index;
 pub mod tools;
 pub mod tree_sitter_meta;
 pub mod util;

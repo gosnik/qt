@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::cancel::{Cancelled, Pacer};
 use crate::scan::ProjectScanResult;
+use crate::syntax_index::{SyntaxCache, index_syntax_files};
 use crate::util::generic;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,9 @@ pub struct ClassSymbol {
     pub qualified_name: String,
     pub file: PathBuf,
     pub line: usize,
+    /// `class` for C/C++; `struct`, `enum`, `union`, `trait`, `type` for
+    /// Rust; `class`, `interface`, `enum`, `type` for TypeScript.
+    pub kind: String,
     pub methods: Vec<MethodSymbol>,
 }
 
@@ -384,6 +388,7 @@ fn index_file(
                 qualified_name,
                 file: relative.to_path_buf(),
                 line: line_number,
+                kind: "class".into(),
                 methods: Vec::new(),
             });
         }
@@ -436,8 +441,19 @@ fn index_file(
     Ok(())
 }
 
-/// Build the code index for all C/C++ sources and headers in the scan.
+/// Build the code index for the scan's C/C++ sources and headers and its
+/// Rust, TypeScript and JavaScript sources.
 pub fn build_code_index(scan: &ProjectScanResult, pacer: &Pacer) -> Result<CodeIndex, Cancelled> {
+    build_code_index_cached(scan, &mut SyntaxCache::default(), pacer)
+}
+
+/// [`build_code_index`] reusing (and refreshing) per-file syntax results in
+/// `cache` across scans.
+pub fn build_code_index_cached(
+    scan: &ProjectScanResult,
+    cache: &mut SyntaxCache,
+    pacer: &Pacer,
+) -> Result<CodeIndex, Cancelled> {
     let mut index = CodeIndex::default();
     let mut operations = 0usize;
     for file in &scan.files {
@@ -458,6 +474,7 @@ pub fn build_code_index(scan: &ProjectScanResult, pacer: &Pacer) -> Result<CodeI
         };
         index_file(&mut index, &file.path, &content, pacer, &mut operations)?;
     }
+    index_syntax_files(&mut index, scan, cache, pacer, &mut operations)?;
     Ok(index)
 }
 
@@ -487,6 +504,7 @@ pub fn class_json(class: &ClassSymbol) -> Value {
         "qualified_name": class.qualified_name,
         "file": generic(&class.file),
         "line": class.line,
+        "kind": class.kind,
         "methods": class.methods.iter().map(method_json).collect::<Vec<_>>(),
     })
 }

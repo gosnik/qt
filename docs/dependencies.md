@@ -68,6 +68,7 @@ archived `scripts/build_llama_cpp.py`:
 | --- | --- |
 | `rusqlite` (bundled) | Index snapshot store with the FTS5 `index_fts` table; bundled SQLite so FTS5 is always compiled in |
 | `tree-sitter`, `tree-sitter-cpp` | In-process C++ parsing for the per-file tree-sitter metadata (replaces the vendored C runtime and grammar) |
+| `tree-sitter-rust`, `tree-sitter-typescript` | Rust, TypeScript and TSX/JavaScript grammars for the Rust and TypeScript code index and tree-sitter metadata |
 
 `qt-index` also uses `qt-core`, `futures`, `regex`, `serde_json`, `tokio` and `tempfile` (dev)
 from the lists above.

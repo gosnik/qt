@@ -143,8 +143,8 @@ crates/qt-cli         headless print / JSON modes and subcommands (binary: qt-cl
 crates/qt-llama       in-process llama.cpp provider: settings, GGUF discovery,
                       offload planning, sampling, runtime
 crates/qt-llama-sys   llama.cpp build and bindings (third_party/llama.cpp)
-crates/qt-index       project index: scanner, build metadata, C/C++ code index,
-                      SQLite/FTS5 store, index tools
+crates/qt-index       project index: scanner, build metadata, C/C++, Rust and
+                      TypeScript/JavaScript code index, SQLite/FTS5 store, index tools
 crates/qt-mcp         MCP client: config discovery, stdio/HTTP/SSE transports,
                       proxy and resource tools, sampling
 crates/qt-memory      governed memory: store, recall, capture, review, Dreaming

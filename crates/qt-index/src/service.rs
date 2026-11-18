@@ -21,10 +21,11 @@ use serde_json::{Value, json};
 
 use crate::build::{build_metadata_summary, scan_build_metadata};
 use crate::cancel::{Cancelled, Pacer};
-use crate::code_index::{CodeIndex, build_code_index};
+use crate::code_index::{CodeIndex, build_code_index_cached};
 use crate::compdb::{CompdbError, write_compilation_database};
 use crate::scan::{ProjectScanResult, ScanError, scan_project_tree};
 use crate::store::{self, SnapshotData};
+use crate::syntax_index::SyntaxCache;
 use crate::tree_sitter_meta::{TreeSitterOptions, TreeSitterResult, generate_tree_sitter_metadata};
 use crate::util::{fnv1a64, generic, path_text, weakly_canonical};
 
@@ -165,7 +166,8 @@ struct Inner {
     state: Mutex<State>,
     wake: Condvar,
     stop: Arc<AtomicBool>,
-    scan_lock: Mutex<()>,
+    /// Held for the whole scan, so it also guards the syntax cache.
+    scan_lock: Mutex<SyntaxCache>,
 }
 
 impl Inner {
@@ -210,7 +212,7 @@ impl Inner {
     }
 
     fn run_once(&self, force_low_priority: bool) {
-        let _serial = self.scan_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut syntax_cache = self.scan_lock.lock().unwrap_or_else(|e| e.into_inner());
         let generation = self.lock().status.generation;
         self.update_status(|s| {
             s.scan_active = true;
@@ -221,7 +223,7 @@ impl Inner {
         });
         let low_priority = force_low_priority || generation > 0;
         let pacer = Pacer::new(self.stop.clone(), low_priority);
-        match self.scan(&pacer, generation) {
+        match self.scan(&pacer, generation, &mut syntax_cache) {
             Ok(()) => {}
             Err(failure) => {
                 self.update_status(|s| {
@@ -247,7 +249,12 @@ impl Inner {
         });
     }
 
-    fn scan(&self, pacer: &Pacer, generation: usize) -> Result<(), ScanFailure> {
+    fn scan(
+        &self,
+        pacer: &Pacer,
+        generation: usize,
+        syntax_cache: &mut SyntaxCache,
+    ) -> Result<(), ScanFailure> {
         let options = &self.options;
         std::fs::create_dir_all(&options.state_directory).map_err(|e| {
             ScanFailure::error(format!(
@@ -277,7 +284,7 @@ impl Inner {
             write_compilation_database(&scan, &metadata, &options.compile_commands_output, pacer)?;
         pacer.checkpoint(0, 0, 25)?;
         self.progress(60, "building code index");
-        let code_index = build_code_index(&scan, pacer)?;
+        let code_index = build_code_index_cached(&scan, syntax_cache, pacer)?;
         pacer.checkpoint(0, 0, 25)?;
         self.progress(80, "generating tree-sitter metadata");
         let tree_sitter = generate_tree_sitter_metadata(&scan, &options.tree_sitter, pacer)?;
@@ -444,7 +451,7 @@ impl BackgroundService {
             options,
             wake: Condvar::new(),
             stop: Arc::new(AtomicBool::new(false)),
-            scan_lock: Mutex::new(()),
+            scan_lock: Mutex::new(SyntaxCache::default()),
         });
         if !defer {
             inner.load_persisted_snapshot();

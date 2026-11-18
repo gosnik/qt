@@ -374,7 +374,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn executes_the_selected_command_with_stdin() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let sink = dir.path().join("sink.txt");
@@ -384,16 +383,14 @@ mod tests {
             "wl-copy"
         };
         let script = bin.path().join(name);
-        std::fs::write(
+        crate::test_support::write_script(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\ncat > '{}'\necho \"$@\" >> '{}'\n",
                 sink.display(),
                 sink.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let tool = ClipboardTool::with_search_path(bin.path());
         let ctx = ToolContext::new(dir.path());
 

@@ -1,7 +1,8 @@
-//! Incremental tree-sitter C++ metadata.
+//! Incremental tree-sitter metadata.
 //!
-//! Every C/C++ source and header is parsed with the tree-sitter C++ grammar
-//! and its S-expression tree is written to `<output>/trees/<file>.tree`.
+//! Every C/C++ source and header is parsed with the tree-sitter C++ grammar,
+//! and every Rust, TypeScript and JavaScript source with its own grammar
+//! ([`Grammar`]); the S-expression tree is written to `<output>/trees/<file>.tree`.
 //! `<output>/metadata.json` records size, mtime and an FNV-1a checksum per
 //! file so unchanged files are reused on the next scan; trees for files that
 //! disappeared are deleted.
@@ -14,7 +15,9 @@ use serde_json::{Value, json};
 
 use crate::cancel::{Cancelled, Pacer};
 use crate::code_index::dependency_or_generated_reason;
+use crate::grammar::Grammar;
 use crate::scan::ProjectScanResult;
+use crate::syntax_index::syntax_skip_reason;
 use crate::util::{fnv1a64, generic, lexically_normal, path_text};
 
 #[derive(Debug, Clone)]
@@ -223,7 +226,8 @@ pub fn grammar_abi_version() -> usize {
     language.abi_version()
 }
 
-/// Generate or refresh tree-sitter metadata for the scan's C/C++ files.
+/// Generate or refresh tree-sitter metadata for the scan's C/C++, Rust,
+/// TypeScript and JavaScript files.
 pub fn generate_tree_sitter_metadata(
     scan: &ProjectScanResult,
     options: &TreeSitterOptions,
@@ -251,10 +255,9 @@ pub fn generate_tree_sitter_metadata(
         return Ok(result);
     }
 
-    let language: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
-    let abi = language.abi_version();
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&language).is_err() {
+    let abi = grammar_abi_version();
+    let mut parsers: BTreeMap<Grammar, Option<tree_sitter::Parser>> = BTreeMap::new();
+    if Grammar::Cpp.parser().is_none() {
         result.message = format!("internal tree-sitter-cpp grammar ABI is incompatible: {abi}");
         return Ok(result);
     }
@@ -267,11 +270,12 @@ pub fn generate_tree_sitter_metadata(
     let existing = read_manifest_entries(&result.manifest_path);
     let mut current: BTreeMap<String, bool> = BTreeMap::new();
     let mut files_json: Vec<Value> = Vec::new();
+    let mut languages = std::collections::BTreeSet::new();
 
     for file in &scan.files {
-        if !file.kind.is_cpp_candidate() {
+        let Some(grammar) = Grammar::for_file(file.kind, &file.path) else {
             continue;
-        }
+        };
         result.files_considered += 1;
         let relative_source = generic(&file.path);
         current.insert(relative_source.clone(), true);
@@ -283,7 +287,11 @@ pub fn generate_tree_sitter_metadata(
         let size = file_size_or_zero(&source);
         let mtime = file_time_ticks(&source);
 
-        if let Some(reason) = dependency_or_generated_reason(&file.path) {
+        let skip_reason = match grammar {
+            Grammar::Cpp => dependency_or_generated_reason(&file.path),
+            _ => syntax_skip_reason(&file.path),
+        };
+        if let Some(reason) = skip_reason {
             result.files_skipped += 1;
             result.skipped_files.push(relative_source.clone());
             let _ = std::fs::remove_file(&output);
@@ -296,6 +304,7 @@ pub fn generate_tree_sitter_metadata(
                 "checksum": "",
                 "skipped": true,
                 "reason": reason,
+                "language": grammar.name(),
             }));
             pacer.checkpoint(result.files_considered, 32, 5)?;
             continue;
@@ -329,7 +338,12 @@ pub fn generate_tree_sitter_metadata(
                         }
                         _ => {
                             pacer.checkpoint(0, 0, 25)?;
-                            parsed = parse_to_tree(&mut parser, &text, &output);
+                            let parser = parsers
+                                .entry(grammar)
+                                .or_insert_with(|| grammar.parser())
+                                .as_mut();
+                            parsed =
+                                parser.is_some_and(|parser| parse_to_tree(parser, &text, &output));
                             pacer.checkpoint(0, 0, 25)?;
                             result.files_updated += 1;
                             if previous.is_none() {
@@ -367,7 +381,9 @@ pub fn generate_tree_sitter_metadata(
             "size": size,
             "mtime": mtime,
             "checksum": checksum,
+            "language": grammar.name(),
         }));
+        languages.insert(grammar.name());
         pacer.checkpoint(result.files_considered, 32, 5)?;
     }
 
@@ -386,6 +402,7 @@ pub fn generate_tree_sitter_metadata(
         "root": path_text(&scan.root),
         "mode": result.mode,
         "tree_sitter_language": "cpp",
+        "tree_sitter_languages": languages,
         "tree_sitter_abi": abi,
         "files": files_json,
     });

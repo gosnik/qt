@@ -16,6 +16,7 @@ pub enum ProjectFileKind {
     CxxSource,
     RustSource,
     TypeScriptSource,
+    JavaScriptSource,
     VueSource,
     PythonSource,
     Header,
@@ -32,6 +33,7 @@ impl ProjectFileKind {
             Self::CxxSource => "cxx_source",
             Self::RustSource => "rust_source",
             Self::TypeScriptSource => "typescript_source",
+            Self::JavaScriptSource => "javascript_source",
             Self::VueSource => "vue_source",
             Self::PythonSource => "python_source",
             Self::Header => "header",
@@ -47,6 +49,7 @@ impl ProjectFileKind {
             "cxx_source" => Self::CxxSource,
             "rust_source" => Self::RustSource,
             "typescript_source" => Self::TypeScriptSource,
+            "javascript_source" => Self::JavaScriptSource,
             "vue_source" => Self::VueSource,
             "python_source" => Self::PythonSource,
             "header" => Self::Header,
@@ -64,6 +67,20 @@ impl ProjectFileKind {
     /// Files covered by the C/C++ code index and tree-sitter metadata.
     pub fn is_cpp_candidate(self) -> bool {
         matches!(self, Self::CSource | Self::CxxSource | Self::Header)
+    }
+
+    /// Rust, TypeScript and JavaScript sources, covered by the syntax code
+    /// index ([`crate::syntax_index`]) and tree-sitter metadata.
+    pub fn is_syntax_candidate(self) -> bool {
+        matches!(
+            self,
+            Self::RustSource | Self::TypeScriptSource | Self::JavaScriptSource
+        )
+    }
+
+    /// Files with a code index: C/C++ plus [`Self::is_syntax_candidate`].
+    pub fn is_code_candidate(self) -> bool {
+        self.is_cpp_candidate() || self.is_syntax_candidate()
     }
 
     /// Text kinds stored in the full-text index and searched by `code.search`.
@@ -231,7 +248,8 @@ pub fn classify_file(path: &Path) -> ProjectFileKind {
         ".c" => ProjectFileKind::CSource,
         ".cc" | ".cpp" | ".cxx" | ".c++" | ".ino" => ProjectFileKind::CxxSource,
         ".rs" => ProjectFileKind::RustSource,
-        ".ts" | ".tsx" => ProjectFileKind::TypeScriptSource,
+        ".ts" | ".tsx" | ".mts" | ".cts" => ProjectFileKind::TypeScriptSource,
+        ".js" | ".jsx" | ".mjs" | ".cjs" => ProjectFileKind::JavaScriptSource,
         ".vue" => ProjectFileKind::VueSource,
         ".py" => ProjectFileKind::PythonSource,
         ".h" | ".hh" | ".hpp" | ".hxx" | ".ipp" | ".inl" => ProjectFileKind::Header,

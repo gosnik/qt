@@ -98,6 +98,14 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] Model tools: symbol, analyze_file, references, build_context, search_index, `index` router.
 - [x] Router operation groups: core, code, fs, git, build. (Decision 2026-11-18: serial, debug, rtos, fetch and util groups are not ported.)
 - [x] `/index` panel.
+- [x] Rust and TypeScript/JavaScript code index (qt extension, 2026-11-18; verified on this repo and `reference/pi`). Acceptance:
+  tree-sitter grammars for Rust, TypeScript, TSX and JavaScript (`.rs`, `.ts`, `.tsx`,
+  `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`); type symbols (Rust struct/enum/union/trait/type,
+  TS class/interface/enum/type alias) with a `kind`; functions and methods (Rust `impl`
+  and trait methods qualified as `Type::method` under the file's module path; TS class methods,
+  exported/top-level arrow functions); call edges from function bodies; tree-sitter trees for
+  `index.ast`; dependency/build outputs (`target/`, `dist/`, `node_modules/`, `.next/`,
+  minified bundles) skipped; existing C/C++ results unchanged; stores from earlier builds still open.
 
 ## Milestone 7: Subagents and MCP
 
