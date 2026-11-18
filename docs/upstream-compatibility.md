@@ -256,8 +256,25 @@ the `llama` provider through qt-core's provider backends (runs, compaction, summ
 model picker and `--list-models`); its models are `settings.llama.models` plus models found by
 `--discover-local-models` (persisted to `settings.json` as archived and registered for the
 process even when persisting fails). The runtime is created on first use and replaced when the
-effective llama settings change. The GUI `/llama` panel is not built yet (`/llama status`,
-`models` and `discover` are answered by `qt-runtime`).
+effective llama settings change.
+
+- **`/llama`** (`qt-runtime::llama_commands`, shared by the CLI slash path and the GUI): the
+  archived subcommands `status` (archived lines plus `native:`, per-device memory and the last
+  offload decision), `models` (`*` marks the selection), `select` (persists
+  `llama.selectedModel`, "Llama model set to llama/<id>"), `load [id]`, `unload`, `reload`,
+  `policy`, `grammar`, `kv status|clear|keep|drop|shift` (archived usage errors and
+  `kv_state:` line), `gpu`, `embeddings`, `prompt`, `run <embed|rank|instruct|chat>` and
+  `discover [dirs]`. The desktop `/llama` panel (bare `/llama`) offers them as tabs (status,
+  models with select/load/"use in chat" and GGUF discovery, a prompt/run/embedding
+  playground, KV cache, GPU, policy and grammar); discovered models are persisted and the
+  model picker is refreshed, so llama models appear in the main picker.
+- **Differences (`/llama`):** `gpu key=value` and `policy key=value` write
+  `settings.llama.backend` / `llama.generation` (the runtime is recreated with them on next
+  use) instead of the archived per-session pending overrides; `grammar` offers
+  `show|list|default <name>|off` over the configured `llama.grammar.files` (persisted as
+  `llama.grammar.default`) instead of the archived per-session inline/file overrides;
+  `run instruct` generates once without the archived 8-round framework tool loop; `prompt`
+  and `run` use non-streaming generation.
 
 - **Compatible:** `settings.llama` keys, defaults, error and validation messages; path
   resolution from the settings file directory with `~`; GGUF discovery roots, ids,
@@ -320,6 +337,15 @@ Ported from the archived `index` subsystem and `tools/index_tool.cpp`.
   for the life of the process); an FTS5 syntax error now surfaces as
   `invalid FTS5 query: ...` instead of silently returning no matches; scans triggered by
   tools and by the worker are serialised.
+- **`/index`** (`qt-runtime::index_commands`): the archived subcommands `tree`, `schemas`,
+  the five ported categories, `status`, `metadata`, `summary [limit]`, `rescan [reason]`,
+  `call <operation> [json]` and `<category.operation> [json]` through the `index` router,
+  with the archived labels, JSON-argument usage and `<label> failed: <status> - <message>`
+  lines. Bare `/index` opens the desktop panel: live service status (scan phase/progress,
+  generation, files, compile commands, build metadata, last error, database), rescan, status
+  JSON, project summary, and queries through the direct tools (`symbol`, `analyze_file`,
+  `references` with direction, `search_index` plain/FTS5, `build_context`), the router tree
+  and arbitrary router calls; output can be copied to the transcript.
 - **Tool results:** a success result's text is the compact JSON output; an error result's
   text is the error message, followed by the structured payload as JSON on the last line
   when there is one. `details.status` carries the archived status (`success`,
@@ -336,6 +362,13 @@ Ported from the archived `index` subsystem and `tools/index_tool.cpp`.
   read results render text contents, image blobs as images and other blobs as a summary
   line. MCP proxy results also carry image content blocks. MCP files contribute only their
   servers, not other settings keys.
+- **`/mcp`** (`qt-runtime::mcp_commands`): `status`, `tools`, `resources [server]`,
+  `reconnect [server]` and `setup` with the archived wording ("MCP Server Status:",
+  "No MCP servers configured", "MCP reconnect: …", `registered_mcp_tools: N`, the config
+  paths and starter `.mcp.json`). Status lines show the live connection state
+  (`connected`, `failed: <error>`, …) instead of the archived `configured`, and `setup`
+  prints the resolved paths. Bare `/mcp` opens the desktop panel: servers with status
+  badges, server info, tools, per-server reconnect, resources list and read, setup guidance.
 
 ## Governed memory (`qt-memory`)
 
@@ -543,9 +576,45 @@ documented in [extensions.md](extensions.md).
   `ConversationHost` over the active conversation and `ctx.ui.*` uses the pluggable
   `ExtensionUi` (headless by default). `qt-cli install|remove|uninstall|update|list|config`
   run the package commands.
-- **Not yet wired:** a GPUI `ExtensionUi` (dialogs, status, widgets, header/footer,
-  components, autocomplete, renderers, shortcuts), `/extensions` package toggles and the
-  GUI's `/reload` (the runtime offers `Runtime::reload`).
+- **Desktop UI** (`qt-app::extensions`): a GPUI `ExtensionUi` is registered with
+  `Runtime::set_extension_ui`. `select`/`confirm`/`input`/`editor` open modal dialogs that
+  block the calling extension thread until answered (Enter/buttons), cancelled (Escape,
+  close; `null`, or `false` for confirm) or timed out (the dialog shows a countdown and
+  closes itself); an empty input is distinct from cancellation. A dialog requested on the
+  UI thread (a hook running there) returns its cancelled value and shows a notification
+  instead of deadlocking. `notify` uses window notifications; `setStatus` entries (sorted by
+  key) and `setFooter` lines show under the status bar, `setHeader` lines under the header
+  bar, `setWidget` blocks above the composer, the working message/indicator (custom frames
+  animated at `intervalMs`) above the composer while the agent runs; `setTitle` sets the
+  window title; `setHiddenThinkingLabel` labels collapsed/hidden thinking; tools expanded
+  state expands every tool card; editor text get/set/paste act on the composer; themes come
+  from the GUI theme list and `setTheme` applies and stores `theme`. `ctx.ui.custom`
+  components render as line panels: the component renders and handles input on the
+  extension thread, keys are encoded as terminal input (`\r`, `\x1b[A`, Ctrl+letter bytes,
+  …) and `done` closes the panel with its value. `setEditorComponent` shows the component
+  above the composer with keyboard focus (the composer stays visible). Autocomplete
+  providers are queried on every composer change; their suggestions appear alone or merge
+  into command/argument suggestions with the same start. `registerShortcut` keys
+  (`ctrl+shift+p`, `alt-x`, `f5`, …) are matched in the window's capture phase and run off
+  the UI thread. Message renderers render displayed custom messages (also ones an idle
+  extension command appended). Extension commands run on their own thread; their output is
+  a transcript card. The `input` hook runs before every composer submission.
+- **Packages:** `/extensions`, `/skills`, `/prompts`, `/themes` (and `/settings
+  resources|packages`) open the archived package resource selector: installed package
+  resources (project packages first, then user) with on/off switches, plus read-only
+  `loaded` rows for extensions loaded outside package settings (archived descriptions,
+  ordering and "No extensions matched." / "No package-managed resources matched.").
+  Toggling appends the archived `+path` / `-path` pattern to the package entry in its scope's
+  settings file and reloads (`Enabled skills <name>.`). Unlike the archived selector,
+  package skills, prompt templates and themes are actually loaded (a `resources_discover`
+  contribution of the runtime applying the package filters, as in Pi; prompt-template roots
+  may now name single `.md` files, like skill and theme roots), and a bare package
+  entry turned into an object keeps its other kinds enabled by writing `["**"]` for them
+  (the archived toggle disabled them). `/themes` opens this selector; the theme picker
+  remains under `/settings theme`.
+- **`/reload`** reloads extensions and resources (`Runtime::reload`), clears the UI state the
+  old extension set registered (status, widgets, header/footer, working indicator, editor
+  component, autocomplete providers), reloads shortcuts and re-discovers themes.
 
 ## Governed memory: recall, context and capture (`qt-memory`, wave 2A)
 
@@ -693,7 +762,14 @@ Pi's subagent extension example supplies the child JSON contract.
   `{"type":"subagent_event","subagent":<event>}`.
 - **`/subagent`:** `list [scope]`, `help`, the role menu entries, `spawn`, `workers`,
   `send`, `follow_up`, `interrupt`, `wait` (1 s) and `call <JSON>` with the archived
-  wording, as library functions for the front ends.
+  wording, as library functions for the front ends. The desktop menu (bare `/subagent`)
+  lists roles by scope (user + built-ins, project, both; with the trust note and discovery
+  warnings) and their definition details, runs one role once ("Use this agent": a tracked
+  `subagent` call with live progress and cancel, result as a transcript card titled
+  `Delegate to subagent "<name>": <task>`), spawns persistent workers (optional name), lists
+  workers with send / follow up / wait / interrupt, and prefills the composer with the
+  parallel and chain workflow prompts. Worker completions are delivered as follow-ups and
+  the runs they start stream into the transcript (GUI run sink).
 - **Differences:**
   - The child executable is `QT_SUBAGENT_EXECUTABLE`, else `qt-cli` beside the running
     binary, else `qt-cli` on `PATH` (the archived binary re-executed itself).
@@ -731,6 +807,12 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
   interactive runtime binds every new conversation itself); `start_background_services`
   starts Dreaming, the five-minute model refresh and MCP connections. `/changelog` reads
   `reference/pi/packages/coding-agent/CHANGELOG.md` under the working directory, as archived.
+  `Runtime::set_run_sink` gives interactive conversations a sink for runs started by
+  extensions (`pi.sendUserMessage`, triggered custom messages) and worker completions; the
+  desktop app pumps them into its transcript (queued after a run that is already shown).
+  The desktop app calls `Runtime::shutdown` when it quits (workers, MCP servers, index,
+  memory capture flushed within 5 s). The subsystem crates are re-exported
+  (`qt_runtime::qt_index`, `qt_mcp`, `qt_llama`, `qt_extensions`, `qt_subagents`).
 - **CLI:** the archived flag set and parsing rules: value options take the next argument
   even when it starts with `-`, repeatable options accumulate, `--tools`/`--models` take
   the last value, `@file` arguments, `-p` followed by a `---` prompt, invalid `--thinking`
@@ -831,13 +913,16 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   an argument, Esc closes. Ctrl/Cmd+K opens a command palette with the same commands; commands
   whose hint starts with `<` (required arguments) prefill the composer instead of running.
   Lines are executed by `slash::dispatch`; text output appears as a card in the transcript
-  (`/help`, `/session`, `/status`, `/changelog`, `/name x`, `/model x`, `/reload`, …). Actions
-  open the existing views: settings (and a theme picker for `/settings theme` and `/themes`),
+  (`/help`, `/session`, `/status`, `/changelog`, `/name x`, `/model x`, …). Actions
+  open the existing views: settings (and a theme picker for `/settings theme`),
   a searchable model picker, a thinking picker, tree, resume, fork picker, login, Ollama,
   import (with the missing-cwd prompt) and quit (`/exit` too, archived alias). `/name` without
-  arguments opens the rename dialog. `/llama`, `/memory`, `/index`, `/mcp`, `/subagent`,
-  `/extensions`, `/skills`, `/prompts` and extension commands show "… is not available in this
-  build." until their panels and the extension runtime are wired. An unknown `/name` is an
+  arguments opens the rename dialog. Bare `/index`, `/mcp`, `/llama` and `/subagent` open
+  their panels; with arguments they run the shared runtime command and show a card.
+  `/extensions`, `/skills`, `/prompts`, `/themes` open the package resource selectors,
+  `/reload` reloads extensions and resources, and extension commands run off the UI thread
+  (see the extensions section). `/memory` shows "… is not available in this build." until
+  its panel is wired. An unknown `/name` is an
   error card (archived); a first word containing `/` (a path) is sent as a prompt.
 - **`/tools`:** a panel with a checkbox per tool (filter, enable/disable all) persisted through
   `Conversation::set_tool_enabled` (`tools-config` entry), plus the mutation approval queue:
@@ -847,7 +932,8 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   panel says so.
 - **`/context`:** an inspector dialog with section tabs (`all`, environment, prompt, messages,
   resources, diagnostics, memory, usage) showing `slash::context_lines`, plus refresh and
-  copy. It is refused while a turn runs (archived).
+  copy. It is refused while a turn runs (archived). `active_tools` counts the tools enabled
+  for the conversation (it counted the whole registry before).
 - **`/export`:** without a path the platform save dialog (`prompt_for_new_path`, default
   `qt-session-<id>.html` in the project) chooses the file; a name without `.html`/`.jsonl`
   gets `.html`. When no file-chooser portal is available an in-app path dialog is shown

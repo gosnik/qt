@@ -253,6 +253,15 @@ fn context_file_labels(path: &Path, conversation: &Conversation) -> (&'static st
     (scope, kind)
 }
 
+/// Tools of `tools` that are active (`/context` `active_tools`, archived
+/// `runtime_metadata` counted the enabled tools, not the registry).
+pub fn active_tool_count(tools: &crate::tools::ToolRegistry, active: &[String]) -> usize {
+    tools
+        .iter()
+        .filter(|t| active.iter().any(|a| a == t.name()))
+        .count()
+}
+
 /// `/context [sections]`: the archived inspection of the assembled system
 /// prompt, session context, resources, diagnostics, memory and usage.
 pub fn context_lines(conversation: &Conversation, arguments: &str) -> Vec<String> {
@@ -311,7 +320,7 @@ pub fn context_lines(conversation: &Conversation, arguments: &str) -> Vec<String
                 queue_mutations: engine.mutation_policy() == crate::tools::MutationPolicy::Queue,
                 allow_external_filesystem_access: policy.allows_external_access(),
             },
-            tools.len(),
+            active_tool_count(&tools, &active),
         );
         lines.push("environment:".into());
         lines.push(format!("- cwd: {}", engine.cwd().display()));

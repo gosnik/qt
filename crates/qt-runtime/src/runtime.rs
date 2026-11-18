@@ -82,6 +82,9 @@ struct Inner {
     current_model: Arc<Mutex<Option<ModelRef>>>,
     refresh: Mutex<Option<ModelRefresh>>,
     background: AtomicBool,
+    /// Where interactive conversations send runs that extensions or worker
+    /// completions start (the GUI transcript).
+    run_sink: Mutex<Option<RunSink>>,
 }
 
 /// A built qt runtime. Cheap to clone.
@@ -312,6 +315,27 @@ impl Runtime {
             append_system_prompt: options.append_system_prompt.clone(),
             ..ResourceOptions::new(&cwd)
         };
+        // Skills, prompt templates and themes of installed packages.
+        let package_root = workspace_root.clone();
+        let package_home = home.root().to_path_buf();
+        let switches = crate::package_resources::ResourceSwitches {
+            skills: !options.no_skills,
+            prompts: !options.no_prompt_templates,
+            themes: !options.no_themes,
+        };
+        hooks.add_resources_discover(Arc::new(move |_: &qt_core::harness::hooks::ResourcesDiscoverEvent| {
+            match crate::package_resources::package_resource_contributions(
+                &package_root,
+                &package_home,
+                switches,
+            ) {
+                Ok(paths) => Some(paths),
+                Err(e) => {
+                    tracing::warn!(target: "qt_runtime::packages", "package resources ignored: {e}");
+                    None
+                }
+            }
+        }));
         let ext_for_tools = extensions.clone();
         let mut builder = Engine::builder(home.clone(), &cwd)
             .builtin_tools(builtin)
@@ -451,6 +475,7 @@ impl Runtime {
                 current_model,
                 refresh: Mutex::new(None),
                 background: AtomicBool::new(false),
+                run_sink: Mutex::new(None),
                 options,
             }),
         };
@@ -464,10 +489,11 @@ impl Runtime {
                 .hooks()
                 .add_conversation_listener(Arc::new(move |conversation: &Conversation| {
                     if let Some(inner) = weak.upgrade() {
+                        let run_sink = inner.run_sink.lock().expect("run sink lock").clone();
                         Runtime { inner }.attach(
                             conversation,
                             AttachOptions {
-                                run_sink: None,
+                                run_sink,
                                 deliver_subagent_events: true,
                             },
                         );
@@ -562,6 +588,89 @@ impl Runtime {
     /// Present extension `ctx.ui.*` calls with `ui` (headless by default).
     pub fn set_extension_ui(&self, ui: Arc<dyn ExtensionUi>) {
         self.inner.extensions.set_ui(ui);
+    }
+
+    /// Receive the event streams of runs that extensions or worker
+    /// completions start in interactive conversations (the GUI pumps them
+    /// into its transcript). The active conversation is re-bound with it.
+    pub fn set_run_sink(&self, sink: Option<RunSink>) {
+        *self.inner.run_sink.lock().expect("run sink lock") = sink.clone();
+        if let Some(conversation) = self.active_conversation() {
+            self.attach(
+                &conversation,
+                AttachOptions {
+                    run_sink: sink,
+                    deliver_subagent_events: self.inner.options.mode.is_interactive(),
+                },
+            );
+        }
+    }
+
+    /// Rows of the `/extensions`, `/skills`, `/prompts` or `/themes`
+    /// selector, enabled state from what is loaded now.
+    pub fn package_resource_items(
+        &self,
+        kind: qt_extensions::packages::ResourceKind,
+    ) -> Result<Vec<crate::package_resources::PackageResourceItem>, String> {
+        use qt_extensions::ExtensionOrigin;
+        use qt_extensions::packages::ResourceKind;
+        let engine = &self.inner.engine;
+        let root = engine.workspace_policy().root().to_path_buf();
+        let settings =
+            qt_extensions::packages::load_package_settings(&root, self.inner.home.root())?;
+        let resources = engine.resources();
+        let snapshot = self.inner.extensions.snapshot();
+        let loaded: Vec<PathBuf> = match kind {
+            ResourceKind::Skills => resources
+                .skills
+                .skills
+                .iter()
+                .map(|s| s.path.clone())
+                .collect(),
+            ResourceKind::Prompts => resources
+                .prompt_templates
+                .templates
+                .iter()
+                .map(|t| t.path.clone())
+                .collect(),
+            ResourceKind::Themes => resources
+                .themes
+                .themes
+                .iter()
+                .map(|t| t.path.clone())
+                .collect(),
+            ResourceKind::Extensions => {
+                snapshot.extensions.iter().map(|e| e.path.clone()).collect()
+            }
+        };
+        let external: Vec<(PathBuf, String)> = snapshot
+            .extensions
+            .iter()
+            .filter(|e| !matches!(e.origin, ExtensionOrigin::Package { .. }))
+            .map(|e| (e.path.clone(), e.manifest.name.clone()))
+            .collect();
+        Ok(crate::package_resources::package_resource_items(
+            &settings,
+            &crate::package_resources::ResourceListing {
+                kind,
+                loaded: &loaded,
+                external_extensions: &external,
+            },
+        ))
+    }
+
+    /// Enable or disable a package resource in its settings file.
+    pub fn toggle_package_resource(
+        &self,
+        item: &crate::package_resources::PackageResourceItem,
+        enabled: bool,
+    ) -> Result<String, String> {
+        crate::package_resources::toggle_package_resource(
+            self.inner.engine.workspace_policy().root(),
+            self.inner.home.root(),
+            item,
+            enabled,
+        )
     }
 
     // ----- conversations -----------------------------------------------------

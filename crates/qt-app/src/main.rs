@@ -2,18 +2,24 @@
 
 mod composer;
 mod dialogs;
+mod extensions;
+mod index_panel;
+mod llama_panel;
 mod login;
+mod mcp_panel;
 mod model_picker;
 mod ollama_panel;
 mod run_status;
 mod session_views;
 mod sessions;
 mod settings_panel;
+mod subagent_panel;
 mod theme;
 mod transcript;
 mod workspace;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use gpui_kit::*;
@@ -26,6 +32,9 @@ use crate::workspace::Workspace;
 pub struct RuntimeGlobal(pub Runtime);
 
 impl Global for RuntimeGlobal {}
+
+/// How long quitting waits for memory capture to flush.
+const SHUTDOWN_CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 
 const USAGE: &str = "Usage: qt [--cwd <dir> | <dir>]\n\nOpens the qt desktop app for a project directory (default: current directory).\nUse qt-cli for headless runs.\n";
 
@@ -100,6 +109,14 @@ fn main() -> Result<()> {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
+            })
+            .detach();
+            // Stop workers, MCP servers and the index, and flush memory
+            // captures before the process exits.
+            let quitting = runtime.clone();
+            cx.on_app_quit(move |_| {
+                let runtime = quitting.clone();
+                async move { runtime.shutdown(SHUTDOWN_CAPTURE_TIMEOUT) }
             })
             .detach();
             cx.activate(true);

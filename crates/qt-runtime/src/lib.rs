@@ -22,9 +22,13 @@
 pub mod code;
 pub mod commands;
 pub mod extensions;
+pub mod index_commands;
+pub mod llama_commands;
 pub mod mcp;
+pub mod mcp_commands;
 pub mod memory;
 pub mod options;
+pub mod package_resources;
 pub mod runtime;
 pub mod subagents;
 
@@ -32,3 +36,11 @@ pub use options::{
     ModelArgument, RunMode, RuntimeOptions, parse_model_argument, resolve_model_argument,
 };
 pub use runtime::{AttachOptions, Runtime, changelog_markdown};
+pub use subagents::RunSink;
+
+// Subsystem crates, for front ends that build panels on the runtime.
+pub use qt_extensions;
+pub use qt_index;
+pub use qt_llama;
+pub use qt_mcp;
+pub use qt_subagents;

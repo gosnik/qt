@@ -122,11 +122,27 @@ qt rewrites the file.
 ## Layout
 
 ```text
-crates/qt-core   UI-agnostic runtime: config, providers, tools, agent loop, sessions
-crates/qt-app    GPUI desktop application (binary: qt)
-crates/qt-cli    headless print mode (binary: qt-cli)
-archived/        previous C++17 TUI implementation (reference only)
-reference/       Pi source used as the behavioural reference (not tracked)
+crates/qt-core        UI-agnostic runtime: config, providers, tools, agent loop, sessions,
+                      slash commands, prompt resources, hooks
+crates/qt-runtime     composition root: builds the engine with every subsystem, the
+                      /index, /mcp, /llama, /subagent commands and package resources
+crates/qt-app         GPUI desktop application (binary: qt): transcript, composer,
+                      panels (/index, /mcp, /llama, /subagent, /ollama, /tools, ...)
+                      and the extension UI
+crates/qt-cli         headless print / JSON modes and subcommands (binary: qt-cli)
+crates/qt-llama       in-process llama.cpp provider: settings, GGUF discovery,
+                      offload planning, sampling, runtime
+crates/qt-llama-sys   llama.cpp build and bindings (third_party/llama.cpp)
+crates/qt-index       project index: scanner, build metadata, C/C++ code index,
+                      SQLite/FTS5 store, index tools
+crates/qt-mcp         MCP client: config discovery, stdio/HTTP/SSE transports,
+                      proxy and resource tools, sampling
+crates/qt-memory      governed memory: store, recall, capture, review, Dreaming
+crates/qt-extensions  extensions: discovery, Rhai runtime, JSON-RPC subprocesses,
+                      packages, ctx.ui API
+crates/qt-subagents   subagent definitions, the subagent tool and persistent workers
+archived/             previous C++17 TUI implementation (reference only)
+reference/            Pi source used as the behavioural reference (not tracked)
 ```
 
 See [PLAN.md](PLAN.md) for status and remaining work, and

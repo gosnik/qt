@@ -286,6 +286,17 @@ fn context_sections_and_unknown_section() {
     assert_eq!(env[3], format!("- cwd: {}", f.root.display()));
     assert_eq!(env[4], format!("- repository_root: {}", f.root.display()));
     assert!(!env.iter().any(|l| l.starts_with("assembled_system_prompt")));
+    let total = f.conv.tool_set().len();
+    let count_line = |env: &[String]| {
+        env.iter()
+            .find_map(|l| l.strip_prefix("- active_tools: "))
+            .map(|n| n.parse::<usize>().unwrap())
+    };
+    assert_eq!(count_line(&env), Some(total));
+    f.conv.set_tool_enabled("ls", false).unwrap();
+    let env = lines(dispatch(&f.conv, "/context environment").unwrap());
+    assert_eq!(count_line(&env), Some(total - 1));
+    f.conv.set_tool_enabled("ls", true).unwrap();
     f.engine.set_memory_context(Some(std::sync::Arc::new(|| {
         vec!["- memory_ids: []".into()]
     })));

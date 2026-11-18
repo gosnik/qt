@@ -237,6 +237,13 @@ pub fn load_prompt_templates(roots: &[PathBuf]) -> PromptTemplateResources {
         }
         let root_path = expand_tilde(&root.to_string_lossy());
         let resolved = path_string(&root_path);
+        // A single template file (`--prompt-template file.md`, package
+        // resources) is loaded on its own, like skill and theme files.
+        if root_path.is_file() && is_markdown(&root_path) {
+            let parent = root_path.parent().map(path_string).unwrap_or_default();
+            load_template_file(Path::new(&parent), &root_path, &mut out);
+            continue;
+        }
         if !root_path.exists() {
             out.diag(
                 TemplateDiagnosticCode::RootDoesNotExist,
@@ -587,6 +594,16 @@ mod tests {
         assert_eq!(
             res.diagnostics[0].code,
             TemplateDiagnosticCode::PromptFileNotReadable
+        );
+
+        // A single file root loads just that template.
+        let res = load_prompt_templates(&[pkg.join("p/one.md"), pkg.join("package.json")]);
+        let names: Vec<&str> = res.templates.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["one"]);
+        assert_eq!(res.templates[0].root, pkg.join("p"));
+        assert_eq!(
+            res.diagnostics[0].code,
+            TemplateDiagnosticCode::RootIsNotDirectory
         );
     }
 }
