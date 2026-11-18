@@ -570,3 +570,40 @@ The archived qt is the reference (`recall_service`, `retrieval_*`, `dense_retrie
     picker) are returned as actions for the front end instead of TUI overlays.
   - Dreaming, post-processing and research are reached through `CaptureHooks` and
     `DreamingControl`; without them `/memory dream run` reports that no cycle was queued.
+
+## Memory Dreaming, research, verifier and post-processing (`qt-memory`)
+
+The archived qt is the reference (`runtime.cpp`, `post_processing_service.cpp`,
+`web_tool.cpp` research mode).
+
+- **Same behaviour:** Dreaming triggers `post_turn`, `interval`, `candidate_threshold` and
+  `manual` with the idle-duration and foreground-activity gate, post-turn coalescing, an
+  eight-cycle queue and manual cycles jumping it. Each cycle samples up to 64 governed
+  records, prefers those least used by the last eight receipts, breaks ties and orders the
+  prompt by hashes of a random UUID, and records `least-recent-cycle-hash-v1`, the seed,
+  pool hash/count and exact input IDs. Claim and receipt events (`dreaming-v6` claim
+  identity), the strict artifact schema and llama grammar, rejection codes, receipt fields,
+  the pending `dream_artifact` review with `derived_from` edges, researched successors with
+  their own `dream_research_successor` review, research citation validation (opened
+  `web_run` refs, or 2xx `web_fetch` of a URL a prior `web_search` returned), the
+  restricted research tools (shared three-call budget, 512 KiB / 20 s fetches, six results,
+  256-byte queries, no `engine_url`, no direct `web_run` URLs, offline still authoritative),
+  the `auto_validate` verifier (local `llama/` model only, four sources, 4096 bytes each,
+  12288 total, literal quotes covering every source, atomic validation of only the
+  successor by `memory_dream_verifier`), deterministic association/compression candidates,
+  the semantic-consolidation child (up to eight records, review-only proposal,
+  claim/receipt, CPU retry after an out-of-device-memory failure) and the
+  `/memory dream [status|run|research <json>]` and RPC `dream` texts all follow the archive.
+  Prompts are verbatim.
+- **Differences:**
+  - The child runner is a trait (`IsolatedChild`); `ProcessChild` launches a
+    `qt --mode json` child, and the composition root may instead supply an in-process
+    llama.cpp child using each task's grammar, temperature and output bounds.
+  - Restricted `web_fetch` results carry the returned page text as `details.content`
+    (the archived fetch payload included it); the search endpoint is the configured
+    `WebOptions.search_engine_url`, which the model still cannot override.
+  - Deterministic post-processing does not queue a second compression review for a pair
+    that already has a pending or deferred one; the archived pass re-queued it on every
+    turn.
+  - Stopping the Dreaming worker discards all queued cycles (the archive still drained
+    manual and threshold cycles with a cancelled child).
