@@ -62,6 +62,9 @@ pub async fn list_models(
     provider: &ProviderConfig,
     settings: &Settings,
 ) -> Result<Vec<ModelInfo>> {
+    if let Some(handle) = &provider.backend {
+        return handle.backend().list_models(provider, settings).await;
+    }
     if provider.needs_api_key() && provider.api_key.is_none() {
         return Ok(Vec::new());
     }

@@ -14,6 +14,7 @@
 //! becomes `stopReason: "aborted"` with whatever content had streamed.
 
 pub mod anthropic;
+pub mod backend;
 pub mod compat;
 pub mod http;
 pub mod models;
@@ -34,6 +35,7 @@ use crate::catalog::{ModelCatalog, ModelSpec};
 use crate::config::{AgentHome, Settings};
 use crate::message::{AssistantMessage, ContentBlock, Message, StopReason, now_millis};
 
+pub use backend::{BackendHandle, ProviderBackend, ProviderBackends};
 pub use http::RetryPolicy;
 pub use models::{ModelInfo, list_models};
 
@@ -114,6 +116,8 @@ pub struct ProviderConfig {
     pub retry: RetryPolicy,
     /// Also send `Authorization: Bearer <key>` (models.json `authHeader`).
     pub auth_header: bool,
+    /// Backend serving this provider instead of the built-in transports.
+    pub backend: Option<BackendHandle>,
 }
 
 impl fmt::Debug for ProviderConfig {
@@ -125,6 +129,7 @@ impl fmt::Debug for ProviderConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "<set>"))
             .field("models", &self.models.len())
             .field("oauth", &self.oauth.is_some())
+            .field("backend", &self.backend)
             .finish()
     }
 }
@@ -534,6 +539,12 @@ pub async fn stream(
     cancel: &CancellationToken,
     on_event: &mut (dyn FnMut(StreamEvent) + Send),
 ) -> AssistantMessage {
+    if let Some(handle) = &provider.backend {
+        return handle
+            .backend()
+            .stream(provider, request, cancel, on_event)
+            .await;
+    }
     let model = resolve_model(provider, request);
     let kind = ProviderKind::from_api(&model.api).unwrap_or(provider.kind);
     let mut partial = PartialMessage::new(provider, &request.model);

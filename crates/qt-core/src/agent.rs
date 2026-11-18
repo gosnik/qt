@@ -21,12 +21,22 @@ use crate::message::{
     now_millis,
 };
 use crate::provider::{self, ModelRef, ProviderConfig, Request, StreamEvent, ThinkingLevel};
-use crate::tools::{Tool, ToolContext, ToolOutput, ToolRegistry};
+use crate::tools::{
+    Tool, ToolContext, ToolEnvironment, ToolOutput, ToolRegistry, apply_output_guard,
+    normalize_arguments,
+};
 
 /// Events emitted while the agent runs. Front ends render from these.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentEvent {
     AgentStart,
+    /// A turn (one assistant response plus its tool calls) begins.
+    TurnStart,
+    /// A turn ended: its assistant message and the tool results it produced.
+    TurnEnd {
+        message: AssistantMessage,
+        tool_results: Vec<ToolResultMessage>,
+    },
     /// An assistant response started streaming.
     AssistantStart,
     /// Incremental content of the streaming assistant response.
@@ -123,6 +133,8 @@ pub struct AgentParams {
     pub thinking: ThinkingLevel,
     pub cwd: std::path::PathBuf,
     pub hooks: Hooks,
+    /// Workspace policy, mutation, bash, image and web options for tools.
+    pub tool_env: ToolEnvironment,
 }
 
 impl AgentParams {
@@ -184,10 +196,12 @@ pub async fn run_loop(
             if cancel.is_cancelled() {
                 break 'outer;
             }
+            emit.emit(AgentEvent::TurnStart);
             for message in std::mem::take(&mut pending) {
                 append(&mut context, message, cb);
             }
             let assistant = stream_response(&params, &context, outcome.turns, cancel, emit).await;
+            let turn_message = assistant.clone();
             outcome.usage.add(&assistant.usage);
             let stop = assistant.stop_reason;
             let calls: Vec<(String, String, Value)> = assistant
@@ -202,13 +216,19 @@ pub async fn run_loop(
             );
             if matches!(stop, StopReason::Error | StopReason::Aborted) {
                 outcome.turns += 1;
+                emit.emit(AgentEvent::TurnEnd {
+                    message: turn_message,
+                    tool_results: Vec::new(),
+                });
                 break 'outer;
             }
             has_more_tool_calls = false;
+            let mut tool_results = Vec::new();
             if !calls.is_empty() {
                 outcome.tool_calls += calls.len();
                 let turn = outcome.turns;
                 let sequential_sink = &mut |result: ToolResultMessage| {
+                    tool_results.push(result.clone());
                     append(
                         &mut context,
                         AgentMessage::Llm(Message::ToolResult(result)),
@@ -219,6 +239,10 @@ pub async fn run_loop(
                 has_more_tool_calls = true;
             }
             outcome.turns += 1;
+            emit.emit(AgentEvent::TurnEnd {
+                message: turn_message,
+                tool_results,
+            });
             if let Some(next) = (cb.turn_end)() {
                 params = next;
             }
@@ -281,6 +305,16 @@ async fn stream_response(
     response
 }
 
+/// Execute `tool` the way [`ToolRegistry::execute`] does: archived argument
+/// aliases are normalised and the output guard is applied.
+async fn run_tool(tool: Arc<dyn Tool>, args: Value, ctx: ToolContext) -> ToolOutput {
+    let args = normalize_arguments(tool.name(), args);
+    let guard = ctx.output_guard;
+    let mut output = tool.execute(args, ctx).await;
+    apply_output_guard(&mut output, guard);
+    output
+}
+
 struct PreparedCall {
     id: String,
     name: String,
@@ -297,7 +331,10 @@ fn tool_context(
 ) -> ToolContext {
     let progress_emit = emit.clone();
     let progress_id = id.to_string();
-    ToolContext::new(params.cwd.clone())
+    params
+        .tool_env
+        .context(params.cwd.clone())
+        .with_call_id(id)
         .with_cancel(cancel.child_token())
         .with_progress(Arc::new(move |output: String| {
             progress_emit.emit(AgentEvent::ToolProgress {
@@ -391,7 +428,8 @@ async fn execute_tools(
         }
         let futures = prepared.iter().map(|call| {
             let run = match (&call.immediate, &call.tool) {
-                (None, Some(tool)) => Some(tool.execute(
+                (None, Some(tool)) => Some(run_tool(
+                    tool.clone(),
                     call.args.clone(),
                     tool_context(params, &call.id, cancel, emit),
                 )),
@@ -429,7 +467,8 @@ async fn execute_tools(
         let (output, executed) = match (call.immediate.take(), call.tool.clone()) {
             (Some(output), _) => (output, false),
             (None, Some(tool)) => (
-                tool.execute(
+                run_tool(
+                    tool,
                     call.args.clone(),
                     tool_context(params, &call.id, cancel, emit),
                 )
@@ -540,6 +579,7 @@ mod tests {
             thinking: ThinkingLevel::Off,
             cwd: std::env::temp_dir(),
             hooks,
+            tool_env: ToolEnvironment::confined(&std::env::temp_dir()),
         }
     }
 

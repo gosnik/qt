@@ -33,45 +33,341 @@ use crate::harness::goals::{
     UpdateGoalTool,
 };
 use crate::harness::hooks::{
-    BeforeAgentStartEvent, BeforeCompactEvent, CompactionReason, Hooks, SessionEvent,
-    SessionStartReason,
+    BeforeAgentStartEvent, BeforeCompactEvent, CompactionReason, Hooks, ProviderResponseEvent,
+    SessionEvent, SessionStartReason,
 };
 use crate::harness::overflow::{is_context_overflow, is_retryable_error};
 use crate::harness::queue::{MessageQueues, QueueSnapshot};
 use crate::harness::settings::{self as hsettings, HarnessSettings, QueueMode};
 use crate::harness::stats::{self, ContextUsage, SessionStats};
+use crate::history::PromptHistoryStore;
 use crate::message::{
-    AgentMessage, AssistantMessage, ContentBlock, CustomMessage, Message, StopReason, Usage,
-    UserContent, now_millis,
+    AgentMessage, AssistantMessage, BashExecutionMessage, ContentBlock, CustomMessage, Message,
+    StopReason, Usage, UserContent, now_millis,
 };
-use crate::prompt::{build_system_prompt, discover_context_files};
-use crate::provider::{self, ModelInfo, ModelRef, ProviderConfig, ThinkingLevel};
+use crate::migrations::StartupMigrationResult;
+use crate::model_scope::{ScopeResolution, resolve_model_scope};
+use crate::policy::WorkspacePolicy;
+use crate::prompt::{
+    ContextFile, PromptInputs, RuntimeMetadata, ToolPolicy, build_prompt, discover_context_files,
+};
+use crate::provider::{
+    self, ModelInfo, ModelRef, ProviderBackend, ProviderBackends, ProviderConfig, ThinkingLevel,
+};
+use crate::resources::{ResourceOptions, ResourceSnapshot, load_resources};
 use crate::session::{
     self, CompactionEntry, EntryKind, Session, SessionCwdIssue, SessionEntry, SessionSummary,
     SessionTree,
 };
-use crate::tools::ToolRegistry;
+use crate::settings_layers::LayeredSettings;
+use crate::slash::{SlashCommand, SlashCommandRegistry};
+use crate::tools::{
+    BashOptions, ImageOptions, MutationPolicy, MutationQueue, OutputGuardOptions, Tool,
+    ToolEnvironment, ToolOutput, ToolRegistry, ToolSelection, WebOptions,
+};
 
 /// `customType` of the session entry recording the active tool set.
 pub const TOOLS_CONFIG_ENTRY_TYPE: &str = "tools-config";
 
 const OVERFLOW_RECOVERY_FAILED: &str = "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.";
 
+/// A provider of tools that can change while the engine runs (MCP proxies
+/// after a reconnect, extension tools after a reload). Queried every time
+/// the tool set is assembled.
+pub trait ToolSource: Send + Sync {
+    fn tools(&self) -> Vec<Arc<dyn Tool>>;
+}
+
+impl<F> ToolSource for F
+where
+    F: Fn() -> Vec<Arc<dyn Tool>> + Send + Sync,
+{
+    fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        self()
+    }
+}
+
 struct EngineInner {
     runtime: tokio::runtime::Runtime,
     http: reqwest::Client,
     home: AgentHome,
     cwd: PathBuf,
-    settings: RwLock<Settings>,
+    settings: RwLock<LayeredSettings>,
     auth: RwLock<AuthStore>,
-    tools: ToolRegistry,
+    /// Built-in tools (created once so per-tool state such as the read
+    /// guard is shared by every run).
+    builtin_tools: ToolRegistry,
+    extra_tools: RwLock<Vec<Arc<dyn Tool>>>,
+    tool_sources: RwLock<Vec<Arc<dyn ToolSource>>>,
+    selection: ToolSelection,
+    backends: ProviderBackends,
     hooks: Hooks,
+    resource_options: ResourceOptions,
+    no_context_files: bool,
+    resources: RwLock<Arc<ResourceSnapshot>>,
+    policy: RwLock<Arc<WorkspacePolicy>>,
+    offline: bool,
+    mutation_policy: MutationPolicy,
+    mutation_queue: Arc<MutationQueue>,
+    bash_env: Vec<(String, Option<String>)>,
+    web: WebOptions,
+    output_guard: OutputGuardOptions,
+    changelog: Option<String>,
+    extension_commands: RwLock<Vec<SlashCommand>>,
+    diagnostics: RwLock<Vec<String>>,
+    migrations: StartupMigrationResult,
     session_dir_override: RwLock<Option<PathBuf>>,
+    ephemeral_sessions: bool,
     model_info: RwLock<HashMap<ModelRef, ModelInfo>>,
+    extensions: RwLock<Vec<ExtensionInfo>>,
+    memory_context: RwLock<Option<MemoryContextFn>>,
+    last_request: Arc<RwLock<Option<Value>>>,
 }
 
 /// Models per provider id, or that provider's discovery error.
 pub type ModelListing = Vec<(String, Result<Vec<ModelInfo>, String>)>;
+
+/// Configuration for [`Engine`], filled in by a composition root (the GUI,
+/// the CLI) from flags and registered subsystems.
+pub struct EngineBuilder {
+    home: AgentHome,
+    cwd: PathBuf,
+    builtin_tools: Option<ToolRegistry>,
+    extra_tools: Vec<Arc<dyn Tool>>,
+    tool_sources: Vec<Arc<dyn ToolSource>>,
+    selection: ToolSelection,
+    backends: ProviderBackends,
+    hooks: Option<Hooks>,
+    resources: ResourceOptions,
+    no_context_files: bool,
+    offline: bool,
+    session_dir: Option<PathBuf>,
+    ephemeral_sessions: bool,
+    mutation_policy: MutationPolicy,
+    bash_env: Vec<(String, Option<String>)>,
+    web: Option<WebOptions>,
+    output_guard: OutputGuardOptions,
+    changelog: Option<String>,
+    migrations: bool,
+    http: Option<reqwest::Client>,
+}
+
+impl EngineBuilder {
+    pub fn new(home: AgentHome, cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            home,
+            cwd: cwd.into(),
+            builtin_tools: None,
+            extra_tools: Vec::new(),
+            tool_sources: Vec::new(),
+            selection: ToolSelection::default(),
+            backends: ProviderBackends::new(),
+            hooks: None,
+            resources: ResourceOptions::default(),
+            no_context_files: false,
+            offline: false,
+            session_dir: None,
+            ephemeral_sessions: false,
+            mutation_policy: MutationPolicy::Execute,
+            bash_env: Vec::new(),
+            web: None,
+            output_guard: OutputGuardOptions::default(),
+            changelog: None,
+            migrations: false,
+            http: None,
+        }
+    }
+
+    /// Replace the built-in tool set (default: [`ToolRegistry::builtin`]).
+    pub fn builtin_tools(mut self, tools: ToolRegistry) -> Self {
+        self.builtin_tools = Some(tools);
+        self
+    }
+
+    /// Register an additional tool (index, memory, subagent, extension...).
+    pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
+        self.extra_tools.push(tool);
+        self
+    }
+
+    pub fn tools(mut self, tools: impl IntoIterator<Item = Arc<dyn Tool>>) -> Self {
+        self.extra_tools.extend(tools);
+        self
+    }
+
+    /// Register a dynamic tool source (MCP proxies that change on reconnect).
+    pub fn tool_source(mut self, source: Arc<dyn ToolSource>) -> Self {
+        self.tool_sources.push(source);
+        self
+    }
+
+    /// `--tools`, `--no-tools`, `--no-builtin-tools` (offline is set with
+    /// [`Self::offline`]).
+    pub fn tool_selection(mut self, selection: ToolSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    /// Register a provider backend (llama.cpp, extension providers).
+    pub fn provider_backend(mut self, backend: Arc<dyn ProviderBackend>) -> Self {
+        self.backends.push(backend);
+        self
+    }
+
+    /// Share a hook registry (extensions, memory) with the engine.
+    pub fn hooks(mut self, hooks: Hooks) -> Self {
+        self.hooks = Some(hooks);
+        self
+    }
+
+    /// `--system-prompt`, `--append-system-prompt`, `--skill`,
+    /// `--prompt-template`, `--theme`, `--no-skills`, `--no-prompt-templates`,
+    /// `--no-themes`. `cwd` and `workspace_root` are filled in by the engine.
+    pub fn resource_options(mut self, options: ResourceOptions) -> Self {
+        self.resources = options;
+        self
+    }
+
+    /// `--no-context-files`: no AGENTS.md / CLAUDE.md in the system prompt.
+    pub fn no_context_files(mut self, value: bool) -> Self {
+        self.no_context_files = value;
+        self
+    }
+
+    /// `--offline`: web tools are removed and model refreshes are skipped.
+    pub fn offline(mut self, value: bool) -> Self {
+        self.offline = value;
+        self
+    }
+
+    /// `--session-dir`.
+    pub fn session_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.session_dir = dir;
+        self
+    }
+
+    /// `--no-session`: new conversations are never written to disk.
+    pub fn ephemeral_sessions(mut self, value: bool) -> Self {
+        self.ephemeral_sessions = value;
+        self
+    }
+
+    /// Queue mutating tool calls for approval instead of running them.
+    pub fn mutation_policy(mut self, policy: MutationPolicy) -> Self {
+        self.mutation_policy = policy;
+        self
+    }
+
+    /// Extra environment for model and user bash commands (`None` removes).
+    pub fn bash_env(mut self, env: Vec<(String, Option<String>)>) -> Self {
+        self.bash_env = env;
+        self
+    }
+
+    /// Web tool options (search endpoint, private-network access for tests).
+    pub fn web_options(mut self, options: WebOptions) -> Self {
+        self.web = Some(options);
+        self
+    }
+
+    pub fn output_guard(mut self, options: OutputGuardOptions) -> Self {
+        self.output_guard = options;
+        self
+    }
+
+    /// Changelog markdown shown by `/changelog` (latest `## ` section).
+    pub fn changelog(mut self, markdown: impl Into<String>) -> Self {
+        self.changelog = Some(markdown.into());
+        self
+    }
+
+    /// Run the archived startup migrations before loading settings.
+    pub fn startup_migrations(mut self, value: bool) -> Self {
+        self.migrations = value;
+        self
+    }
+
+    /// Use an existing HTTP client.
+    pub fn http_client(mut self, client: reqwest::Client) -> Self {
+        self.http = Some(client);
+        self
+    }
+
+    pub fn build(self) -> Result<Engine> {
+        let cwd = self.cwd.canonicalize().unwrap_or(self.cwd);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .thread_name("qt-core")
+            .enable_all()
+            .build()
+            .context("starting async runtime")?;
+        let http = match self.http {
+            Some(client) => client,
+            None => reqwest::Client::builder()
+                .user_agent(concat!("qt/", env!("CARGO_PKG_VERSION")))
+                .connect_timeout(std::time::Duration::from_secs(20))
+                .build()
+                .context("building HTTP client")?,
+        };
+        let migrations = if self.migrations {
+            crate::migrations::run_startup_migrations(&cwd, &self.home)
+        } else {
+            StartupMigrationResult::default()
+        };
+        let auth = AuthStore::load(&self.home).unwrap_or_default();
+        let mut selection = self.selection;
+        selection.offline |= self.offline;
+        let mut web = self.web.unwrap_or_default();
+        web.offline |= self.offline;
+        let mut resource_options = self.resources;
+        resource_options.cwd = cwd.clone();
+        let hooks = self.hooks.unwrap_or_default();
+        let last_request: Arc<RwLock<Option<Value>>> = Arc::new(RwLock::new(None));
+        let slot = last_request.clone();
+        hooks.add_after_provider_response(Arc::new(move |event: &ProviderResponseEvent| {
+            *slot.write().expect("request lock") = Some(request_json(&event.request));
+        }));
+        let engine = Engine {
+            inner: Arc::new(EngineInner {
+                runtime,
+                http,
+                settings: RwLock::new(LayeredSettings::default()),
+                auth: RwLock::new(auth),
+                builtin_tools: self.builtin_tools.unwrap_or_else(ToolRegistry::builtin),
+                extra_tools: RwLock::new(self.extra_tools),
+                tool_sources: RwLock::new(self.tool_sources),
+                selection,
+                backends: self.backends,
+                hooks,
+                resource_options,
+                no_context_files: self.no_context_files,
+                resources: RwLock::new(Arc::new(ResourceSnapshot::default())),
+                policy: RwLock::new(Arc::new(WorkspacePolicy::confined(&cwd))),
+                offline: self.offline,
+                mutation_policy: self.mutation_policy,
+                mutation_queue: Arc::new(MutationQueue::new()),
+                bash_env: self.bash_env,
+                web,
+                output_guard: self.output_guard,
+                changelog: self.changelog,
+                extension_commands: RwLock::new(Vec::new()),
+                diagnostics: RwLock::new(Vec::new()),
+                migrations,
+                session_dir_override: RwLock::new(self.session_dir),
+                ephemeral_sessions: self.ephemeral_sessions,
+                model_info: RwLock::new(HashMap::new()),
+                extensions: RwLock::new(Vec::new()),
+                memory_context: RwLock::new(None),
+                last_request: last_request.clone(),
+                home: self.home,
+                cwd,
+            }),
+        };
+        engine.reload_settings();
+        engine.reload_resources();
+        Ok(engine)
+    }
+}
 
 /// Shared, cheaply cloneable engine handle.
 #[derive(Clone)]
@@ -80,36 +376,14 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// An engine with default options (all built-in tools, settings and
+    /// resources from `home` and `cwd`).
     pub fn new(home: AgentHome, cwd: impl Into<PathBuf>) -> Result<Self> {
-        let cwd = cwd.into();
-        let cwd = cwd.canonicalize().unwrap_or(cwd);
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .thread_name("qt-core")
-            .enable_all()
-            .build()
-            .context("starting async runtime")?;
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("qt/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(std::time::Duration::from_secs(20))
-            .build()
-            .context("building HTTP client")?;
-        let settings = Settings::load(&home).unwrap_or_default();
-        let auth = AuthStore::load(&home).unwrap_or_default();
-        Ok(Self {
-            inner: Arc::new(EngineInner {
-                runtime,
-                http,
-                home,
-                cwd,
-                settings: RwLock::new(settings),
-                auth: RwLock::new(auth),
-                tools: ToolRegistry::coding(),
-                hooks: Hooks::new(),
-                session_dir_override: RwLock::new(None),
-                model_info: RwLock::new(HashMap::new()),
-            }),
-        })
+        EngineBuilder::new(home, cwd).build()
+    }
+
+    pub fn builder(home: AgentHome, cwd: impl Into<PathBuf>) -> EngineBuilder {
+        EngineBuilder::new(home, cwd)
     }
 
     pub fn home(&self) -> &AgentHome {
@@ -118,12 +392,87 @@ impl Engine {
     pub fn cwd(&self) -> &Path {
         &self.inner.cwd
     }
-    pub fn tools(&self) -> &ToolRegistry {
-        &self.inner.tools
-    }
     /// The hook registry shared by all conversations.
     pub fn hooks(&self) -> &Hooks {
         &self.inner.hooks
+    }
+    /// The HTTP client used for providers and discovery.
+    pub fn http(&self) -> &reqwest::Client {
+        &self.inner.http
+    }
+    /// `--offline`.
+    pub fn is_offline(&self) -> bool {
+        self.inner.offline
+    }
+    /// What the startup migrations changed (empty unless requested).
+    pub fn migration_result(&self) -> &StartupMigrationResult {
+        &self.inner.migrations
+    }
+    /// The changelog markdown given to the builder.
+    pub fn changelog(&self) -> Option<&str> {
+        self.inner.changelog.as_deref()
+    }
+    /// Registered provider backends.
+    pub fn provider_backends(&self) -> &ProviderBackends {
+        &self.inner.backends
+    }
+    /// The tool selection in effect (`--tools`, `--no-tools`, ...).
+    pub fn tool_selection(&self) -> &ToolSelection {
+        &self.inner.selection
+    }
+
+    /// Every tool available to conversations: built-ins, registered tools
+    /// and dynamic sources, filtered by the tool selection. Later
+    /// registrations replace earlier tools of the same name.
+    pub fn tools(&self) -> ToolRegistry {
+        let selection = &self.inner.selection;
+        if selection.no_tools {
+            return ToolRegistry::empty();
+        }
+        let mut registry = if selection.no_builtin_tools {
+            ToolRegistry::empty()
+        } else {
+            self.inner.builtin_tools.clone()
+        };
+        for tool in self.inner.extra_tools.read().expect("tools lock").iter() {
+            registry = registry.with(tool.clone());
+        }
+        let sources = self.inner.tool_sources.read().expect("tools lock").clone();
+        for source in sources {
+            for tool in source.tools() {
+                registry = registry.with(tool);
+            }
+        }
+        registry.retain(|name| {
+            selection.admits(name)
+                && !(selection.offline && crate::tools::WEB_TOOL_NAMES.contains(&name))
+        });
+        registry
+    }
+
+    /// Register a tool after construction (replaces a tool of the same name).
+    pub fn add_tool(&self, tool: Arc<dyn Tool>) {
+        let mut tools = self.inner.extra_tools.write().expect("tools lock");
+        tools.retain(|t| t.name() != tool.name());
+        tools.push(tool);
+    }
+
+    /// Remove registered tools whose name satisfies `remove`.
+    pub fn remove_tools(&self, mut remove: impl FnMut(&str) -> bool) {
+        self.inner
+            .extra_tools
+            .write()
+            .expect("tools lock")
+            .retain(|t| !remove(t.name()));
+    }
+
+    /// Register a dynamic tool source after construction.
+    pub fn add_tool_source(&self, source: Arc<dyn ToolSource>) {
+        self.inner
+            .tool_sources
+            .write()
+            .expect("tools lock")
+            .push(source);
     }
 
     /// Run `future` on the engine runtime; the handle can be awaited anywhere.
@@ -140,18 +489,95 @@ impl Engine {
         self.inner.runtime.block_on(future)
     }
 
+    // ----- settings ----------------------------------------------------------
+
+    /// Effective settings: global with the project layer merged on top.
     pub fn settings(&self) -> Settings {
-        self.inner.settings.read().expect("settings lock").clone()
+        self.inner
+            .settings
+            .read()
+            .expect("settings lock")
+            .effective()
     }
 
+    /// The global settings layer (what [`Self::update_settings`] edits).
+    pub fn global_settings(&self) -> Settings {
+        self.inner
+            .settings
+            .read()
+            .expect("settings lock")
+            .global
+            .clone()
+    }
+
+    /// The project settings file in use, if any.
+    pub fn project_settings_path(&self) -> Option<PathBuf> {
+        self.inner
+            .settings
+            .read()
+            .expect("settings lock")
+            .project_path
+            .clone()
+    }
+
+    /// Change and save the global settings.
     pub fn update_settings(&self, change: impl FnOnce(&mut Settings)) -> Result<()> {
-        let mut settings = self.inner.settings.write().expect("settings lock");
-        change(&mut settings);
-        settings.save(&self.inner.home)
+        let result = {
+            let mut layered = self.inner.settings.write().expect("settings lock");
+            change(&mut layered.global);
+            layered.global.save(&self.inner.home)
+        };
+        self.refresh_policy();
+        result
+    }
+
+    /// Re-read global and project settings and the workspace policy.
+    pub fn reload_settings(&self) {
+        let layered = LayeredSettings::load(&self.inner.home, &self.inner.cwd);
+        *self.inner.settings.write().expect("settings lock") = layered;
+        self.refresh_policy();
+    }
+
+    fn refresh_policy(&self) {
+        let (global, project, project_path, mut diagnostics) = {
+            let layered = self.inner.settings.read().expect("settings lock");
+            (
+                layered.global.raw().clone(),
+                layered.project.clone(),
+                layered.project_path.clone(),
+                layered.diagnostics.clone(),
+            )
+        };
+        let policy = match WorkspacePolicy::from_settings(
+            &self.inner.cwd,
+            &global,
+            (!project.is_empty()).then_some(&project),
+        ) {
+            Ok(policy) => policy,
+            Err(e) => {
+                let file = project_path
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| self.inner.home.settings_path().display().to_string());
+                diagnostics.push(format!("invalid settings in {file}: {e}"));
+                WorkspacePolicy::confined(&self.inner.cwd)
+            }
+        };
+        *self.inner.policy.write().expect("policy lock") = Arc::new(policy);
+        *self.inner.diagnostics.write().expect("diagnostics lock") = diagnostics;
+    }
+
+    /// Settings and policy problems found while loading (project settings
+    /// that broaden the global policy, unreadable files).
+    pub fn settings_diagnostics(&self) -> Vec<String> {
+        self.inner
+            .diagnostics
+            .read()
+            .expect("diagnostics lock")
+            .clone()
     }
 
     pub fn harness_settings(&self) -> HarnessSettings {
-        HarnessSettings::from_settings(&self.inner.settings.read().expect("settings lock"))
+        HarnessSettings::from_settings(&self.settings())
     }
 
     /// Toggle auto-compaction (`compaction.enabled`).
@@ -164,10 +590,145 @@ impl Engine {
         self.update_settings(|s| hsettings::set_retry_enabled(s, enabled))
     }
 
+    // ----- tool runtime ------------------------------------------------------
+
+    /// The workspace path policy from `workspaceRoot` /
+    /// `allowExternalFilesystemAccess` (global, narrowed by the project).
+    pub fn workspace_policy(&self) -> Arc<WorkspacePolicy> {
+        self.inner.policy.read().expect("policy lock").clone()
+    }
+
+    pub fn mutation_policy(&self) -> MutationPolicy {
+        self.inner.mutation_policy
+    }
+
+    /// Pending mutations when the policy is [`MutationPolicy::Queue`].
+    pub fn mutation_queue(&self) -> &Arc<MutationQueue> {
+        &self.inner.mutation_queue
+    }
+
+    /// Bash options from `shellPath`, `shellCommandPrefix` and the builder
+    /// environment.
+    pub fn bash_options(&self) -> BashOptions {
+        let settings = self.settings();
+        BashOptions {
+            command_prefix: settings.shell_command_prefix(),
+            env: self.inner.bash_env.clone(),
+            shell_path: settings.shell_path().map(PathBuf::from),
+        }
+    }
+
+    /// Tool configuration for a run against a model that does (`Some(true)`)
+    /// or does not support images.
+    pub fn tool_environment(&self, model_supports_images: Option<bool>) -> ToolEnvironment {
+        let settings = self.settings();
+        let auto_resize = settings.image_auto_resize();
+        ToolEnvironment {
+            policy: self.workspace_policy(),
+            mutation_policy: self.inner.mutation_policy,
+            mutation_queue: Some(self.inner.mutation_queue.clone()),
+            output_guard: self.inner.output_guard,
+            bash: self.bash_options(),
+            images: ImageOptions {
+                auto_resize,
+                resize: auto_resize.then(crate::images::resize_hook),
+                model_supports_images,
+            },
+            web: self.inner.web.clone(),
+        }
+    }
+
+    /// Execute a queued mutation the user approved; the result is not
+    /// added to any conversation.
+    pub fn execute_approved_mutation(&self, id: &str) -> Result<JoinHandle<ToolOutput>> {
+        let mutation = self
+            .inner
+            .mutation_queue
+            .approve(id)
+            .with_context(|| format!("unknown mutation: {id}"))?;
+        let registry = self.tools();
+        let ctx = self.tool_environment(None).context(self.inner.cwd.clone());
+        Ok(self.spawn(async move { registry.execute_approved(&mutation, ctx).await }))
+    }
+
+    /// Whether `model` accepts image input (discovered metadata, else the
+    /// catalog record).
+    pub fn model_supports_images(&self, model: &ModelRef) -> Option<bool> {
+        if let Some(info) = self.model_info(model) {
+            return Some(info.vision);
+        }
+        self.provider(&model.provider)
+            .map(|p| p.model_spec(&model.id).supports_images())
+    }
+
+    // ----- resources ---------------------------------------------------------
+
+    /// The loaded prompt resources (skills, templates, themes, SYSTEM.md).
+    pub fn resources(&self) -> Arc<ResourceSnapshot> {
+        self.inner.resources.read().expect("resources lock").clone()
+    }
+
+    /// The resource options in effect (CLI flags).
+    pub fn resource_options(&self) -> &ResourceOptions {
+        &self.inner.resource_options
+    }
+
+    /// Re-read settings, the workspace policy and all prompt resources
+    /// (`/reload`). Returns the resource diagnostics.
+    pub fn reload_resources(&self) -> Vec<String> {
+        self.reload_settings();
+        let mut options = self.inner.resource_options.clone();
+        options.workspace_root = Some(self.workspace_policy().root().to_path_buf());
+        let snapshot = load_resources(&self.inner.home, &options);
+        let lines = snapshot.diagnostic_lines();
+        *self.inner.resources.write().expect("resources lock") = Arc::new(snapshot);
+        lines
+    }
+
+    /// Instruction files folded into the system prompt (none with
+    /// `--no-context-files`).
+    pub fn context_files(&self) -> Vec<ContextFile> {
+        if self.inner.no_context_files {
+            return Vec::new();
+        }
+        discover_context_files(&self.inner.home, &self.inner.cwd)
+    }
+
+    /// Register extension slash commands (they take precedence over
+    /// built-ins, templates and skills).
+    pub fn set_extension_commands(&self, commands: Vec<SlashCommand>) {
+        *self
+            .inner
+            .extension_commands
+            .write()
+            .expect("commands lock") = commands;
+    }
+
+    /// The slash command registry: extensions, built-ins, prompt templates,
+    /// then `/skill:<name>` commands.
+    pub fn slash_commands(&self) -> SlashCommandRegistry {
+        let extensions = self
+            .inner
+            .extension_commands
+            .read()
+            .expect("commands lock")
+            .clone();
+        SlashCommandRegistry::build(&extensions, &self.resources())
+    }
+
+    /// The prompt history store (`history.jsonl`, `terminal.promptHistoryLimit`).
+    pub fn prompt_history(&self) -> PromptHistoryStore {
+        PromptHistoryStore::new(&self.inner.home, self.settings().prompt_history_limit())
+    }
+
+    // ----- providers and models ---------------------------------------------
+
     pub fn providers(&self) -> Vec<ProviderConfig> {
-        let settings = self.inner.settings.read().expect("settings lock");
+        let settings = self.settings();
         let auth = self.inner.auth.read().expect("auth lock");
-        provider::configured_providers(&settings, &auth)
+        let mut providers = provider::configured_providers(&settings, &auth);
+        self.inner.backends.merge_into(&mut providers, &settings);
+        providers
     }
 
     pub fn provider(&self, id: &str) -> Option<ProviderConfig> {
@@ -181,6 +742,37 @@ impl Engine {
             .expect("auth lock")
             .stored_api_key(provider)
             .is_some()
+    }
+
+    /// Where `provider`'s credential comes from, as `/status` shows it
+    /// (`auth.json api key`, `auth.json token`, an environment variable,
+    /// `key in models.json`, `command in models.json`, `unconfigured`).
+    pub fn auth_status_label(&self, provider: &str) -> String {
+        let auth = self.inner.auth.read().expect("auth lock");
+        match auth.credential(provider) {
+            Some(crate::auth::Credential::ApiKey(_)) => return "auth.json api key".into(),
+            Some(crate::auth::Credential::OAuth(_)) => return "auth.json token".into(),
+            None => {}
+        }
+        drop(auth);
+        if let Some(name) = crate::auth::find_env_vars(provider).first() {
+            return (*name).to_string();
+        }
+        let settings = self.settings();
+        let (catalog, _) = provider::model_catalog(&settings);
+        let configured = catalog
+            .providers
+            .iter()
+            .find(|p| p.id == provider)
+            .and_then(|p| p.api_key.clone())
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
+        match configured {
+            Some(key) if key.starts_with('!') => "command in models.json".into(),
+            Some(key) if std::env::var(&key).is_ok_and(|v| !v.is_empty()) => key,
+            Some(_) => "key in models.json".into(),
+            None => "unconfigured".into(),
+        }
     }
 
     /// Store (or with an empty key, remove) the API key for `provider`.
@@ -202,10 +794,14 @@ impl Engine {
         Ok(())
     }
 
-    /// The model from settings, if its provider is usable.
+    /// The model from settings, if its provider is usable. A milestone-1
+    /// `ollama` provider id is read as `ollama:<first instance>`.
     pub fn default_model(&self) -> Option<ModelRef> {
         let settings = self.settings();
-        let model = ModelRef::new(settings.default_provider()?, settings.default_model()?);
+        let provider = settings.default_provider()?;
+        let provider =
+            crate::migrations::migrate_provider_id(&provider, settings.raw()).unwrap_or(provider);
+        let model = ModelRef::new(provider, settings.default_model()?);
         self.provider(&model.provider)
             .filter(ProviderConfig::is_ready)
             .map(|_| model)
@@ -218,13 +814,17 @@ impl Engine {
     /// Discover models from every ready provider, concurrently. Results are
     /// also remembered for context-window lookups.
     pub fn list_models(&self) -> JoinHandle<ModelListing> {
-        let http = self.inner.http.clone();
-        let settings = self.settings();
         let providers: Vec<ProviderConfig> = self
             .providers()
             .into_iter()
             .filter(ProviderConfig::is_ready)
             .collect();
+        self.list_models_of(providers)
+    }
+
+    fn list_models_of(&self, providers: Vec<ProviderConfig>) -> JoinHandle<ModelListing> {
+        let http = self.inner.http.clone();
+        let settings = self.settings();
         let engine = self.clone();
         self.spawn(async move {
             let lookups = providers.into_iter().map(|p| {
@@ -247,12 +847,78 @@ impl Engine {
         })
     }
 
+    /// Refresh the OpenAI and OpenRouter catalogs (`/model refresh`). Fails
+    /// in offline mode with the archived message.
+    pub fn refresh_models(&self) -> Result<JoinHandle<ModelListing>> {
+        if self.inner.offline || crate::tools::offline_mode_enabled(&self.inner.web) {
+            bail!("Model refresh is unavailable in offline mode");
+        }
+        let providers: Vec<ProviderConfig> = self
+            .providers()
+            .into_iter()
+            .filter(|p| REFRESHED_PROVIDERS.contains(&p.id.as_str()) && p.is_ready())
+            .collect();
+        Ok(self.list_models_of(providers))
+    }
+
+    /// Refresh the OpenAI / OpenRouter catalogs every `interval` (Pi
+    /// refreshes every five minutes) until the returned handle is dropped.
+    /// Each listing is also sent on the receiver.
+    pub fn start_model_refresh(&self, interval: std::time::Duration) -> ModelRefresh {
+        let (tx, rx) = async_channel::unbounded();
+        let engine = self.clone();
+        let handle = self.spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let Ok(job) = engine.refresh_models() else {
+                    break;
+                };
+                let Ok(listing) = job.await else {
+                    continue;
+                };
+                if tx.send(listing).await.is_err() {
+                    break;
+                }
+            }
+        });
+        ModelRefresh {
+            listings: rx,
+            handle,
+        }
+    }
+
     /// Record model metadata (context windows) from a discovery result.
     pub fn remember_models(&self, models: &[ModelInfo]) {
         let mut map = self.inner.model_info.write().expect("model info lock");
         for m in models {
             map.insert(m.model_ref(), m.clone());
         }
+    }
+
+    /// Discovered metadata of `model`.
+    pub fn model_info(&self, model: &ModelRef) -> Option<ModelInfo> {
+        self.inner
+            .model_info
+            .read()
+            .expect("model info lock")
+            .get(model)
+            .cloned()
+    }
+
+    /// Every discovered model, sorted by provider and id.
+    pub fn known_models(&self) -> Vec<ModelInfo> {
+        let mut models: Vec<ModelInfo> = self
+            .inner
+            .model_info
+            .read()
+            .expect("model info lock")
+            .values()
+            .cloned()
+            .collect();
+        models.sort_by(|a, b| (&a.provider, &a.id).cmp(&(&b.provider, &b.id)));
+        models
     }
 
     /// Known context window of `model`, if discovered.
@@ -263,6 +929,17 @@ impl Engine {
             .expect("model info lock")
             .get(model)
             .and_then(|m| m.context_window)
+    }
+
+    /// `enabledModels` resolved against `available` (Pi
+    /// `resolveModelScope`); empty when no patterns are configured.
+    pub fn scoped_models(&self, available: &[ModelInfo]) -> ScopeResolution {
+        resolve_model_scope(&self.settings().enabled_models(), available)
+    }
+
+    /// Persist `enabledModels` (`/scoped-models`).
+    pub fn set_enabled_models(&self, patterns: &[String]) -> Result<()> {
+        self.update_settings(|s| s.set_enabled_models(patterns))
     }
 
     // ----- session catalog -------------------------------------------------
@@ -283,7 +960,7 @@ impl Engine {
             .clone();
         session::resolve_session_dir(
             cli.as_deref(),
-            &self.inner.settings.read().expect("settings lock"),
+            &self.settings(),
             &self.inner.home,
             &self.inner.cwd,
         )
@@ -323,7 +1000,11 @@ impl Engine {
         session::missing_cwd_issue(path, &self.inner.cwd)
     }
 
+    /// A new conversation; never written to disk with `--no-session`.
     pub fn new_conversation(&self, model: Option<ModelRef>) -> Conversation {
+        if self.inner.ephemeral_sessions {
+            return self.new_ephemeral_conversation(model);
+        }
         let session = Session::create(&self.session_dir(), &self.inner.cwd);
         Conversation::new(self.clone(), session, model, SessionStartReason::New, None)
     }
@@ -345,6 +1026,20 @@ impl Engine {
         self.open_conversation_with(path, Some(cwd), SessionStartReason::Resume, None)
     }
 
+    fn session_model(&self, model: Option<ModelRef>) -> Option<ModelRef> {
+        let settings = self.settings();
+        model
+            .filter(|m| !m.provider.is_empty() && !m.id.is_empty())
+            .map(
+                |m| match crate::migrations::migrate_provider_id(&m.provider, settings.raw()) {
+                    Some(provider) => ModelRef::new(provider, m.id),
+                    None => m,
+                },
+            )
+            .filter(|m| self.provider(&m.provider).is_some_and(|p| p.is_ready()))
+            .or_else(|| self.default_model())
+    }
+
     fn open_conversation_with(
         &self,
         path: &Path,
@@ -353,16 +1048,11 @@ impl Engine {
         previous: Option<PathBuf>,
     ) -> Result<Conversation> {
         let session = Session::open_with(path, cwd)?;
-        let model = session
-            .build_context()
-            .model
-            .filter(|m| !m.provider.is_empty() && !m.id.is_empty())
-            .filter(|m| self.provider(&m.provider).is_some_and(|p| p.is_ready()))
-            .or_else(|| self.default_model());
+        let model = self.session_model(session.build_context().model);
         Ok(Conversation::new(
             self.clone(),
             session,
-            Some(model).flatten(),
+            model,
             reason,
             previous,
         ))
@@ -399,7 +1089,7 @@ impl Engine {
             copy.branch(leaf)?;
         }
         copy.rewrite()?;
-        let model = copy.build_context().model.or_else(|| self.default_model());
+        let model = self.session_model(copy.build_context().model);
         Ok(Conversation::new(
             self.clone(),
             copy,
@@ -441,9 +1131,55 @@ impl Engine {
         self.open_conversation_with(&dest, cwd_override, SessionStartReason::Import, None)
     }
 
-    fn system_prompt(&self, tools: &ToolRegistry) -> String {
-        let files = discover_context_files(&self.inner.home, &self.inner.cwd);
-        build_system_prompt(tools, &files, &self.inner.cwd)
+    /// The system prompt for `tools`: resources (SYSTEM.md, APPEND_SYSTEM.md,
+    /// `--system-prompt`, skills), context files and the environment block
+    /// (workspace root, shell, network, tool permissions).
+    pub fn system_prompt(&self, tools: &ToolRegistry) -> String {
+        let resources = self.resources();
+        let files = self.context_files();
+        let policy = self.workspace_policy();
+        let settings = self.settings();
+        let runtime = RuntimeMetadata::detect(
+            &self.inner.cwd,
+            Some(policy.root()),
+            settings.shell_path().as_deref(),
+            self.inner.offline,
+            ToolPolicy {
+                queue_mutations: self.inner.mutation_policy == MutationPolicy::Queue,
+                allow_external_filesystem_access: policy.allows_external_access(),
+            },
+            tools.len(),
+        );
+        let inputs = PromptInputs {
+            custom_prompt: resources.custom_system_prompt(),
+            append_system_prompt: resources.append_system_prompt(),
+            skills: &resources.skills.skills,
+            runtime: Some(&runtime),
+            ..PromptInputs::new(tools, &files, &self.inner.cwd)
+        };
+        build_prompt(&inputs)
+    }
+}
+
+/// Providers refreshed by `/model refresh` and the periodic refresh.
+const REFRESHED_PROVIDERS: &[&str] = &["openai", "openrouter"];
+
+/// A running periodic model refresh; dropping it stops the refresh.
+pub struct ModelRefresh {
+    /// Listings from each refresh.
+    pub listings: Receiver<ModelListing>,
+    handle: JoinHandle<()>,
+}
+
+impl ModelRefresh {
+    pub fn stop(&self) {
+        self.handle.abort();
+    }
+}
+
+impl Drop for ModelRefresh {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }
 
@@ -491,7 +1227,7 @@ struct Pending {
     params_dirty: bool,
 }
 
-struct ConversationState {
+pub(crate) struct ConversationState {
     session: Session,
     messages: Vec<AgentMessage>,
     model: Option<ModelRef>,
@@ -505,6 +1241,11 @@ struct ConversationState {
     pending: Pending,
     retry_attempt: u32,
     overflow_recovery_attempted: bool,
+    /// User bash results recorded while the agent ran (Pi
+    /// `_pendingBashMessages`), flushed when the run ends.
+    pending_bash: Vec<BashExecutionMessage>,
+    /// Cancels the running user bash command.
+    bash_running: Option<CancellationToken>,
 }
 
 /// One conversation (session) driven by a front end.
@@ -524,11 +1265,7 @@ impl std::fmt::Debug for Conversation {
 }
 
 fn thinking_from_str(s: &str) -> ThinkingLevel {
-    match s {
-        "minimal" => ThinkingLevel::Low,
-        "xhigh" => ThinkingLevel::High,
-        other => ThinkingLevel::parse(other).unwrap_or_default(),
-    }
+    ThinkingLevel::parse(s).unwrap_or_default()
 }
 
 fn user_message(text: &str, images: Vec<ContentBlock>) -> AgentMessage {
@@ -625,6 +1362,8 @@ impl Conversation {
                 pending: Pending::default(),
                 retry_attempt: 0,
                 overflow_recovery_attempted: false,
+                pending_bash: Vec::new(),
+                bash_running: None,
             })),
             goal: Arc::new(Mutex::new(GoalCell { goal, dirty: false })),
             engine,
@@ -633,7 +1372,7 @@ impl Conversation {
         conversation
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, ConversationState> {
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, ConversationState> {
         self.state.lock().expect("conversation lock")
     }
 
@@ -1110,12 +1849,13 @@ impl Conversation {
     }
 
     fn tool_registry(&self, state: &ConversationState) -> ToolRegistry {
+        let all = self.engine.tools();
         let mut registry = match &state.active_tools {
-            None => self.engine.tools().clone(),
+            None => all,
             Some(names) => {
                 let mut r = ToolRegistry::empty();
                 for name in names {
-                    if let Some(t) = self.engine.tools().get(name) {
+                    if let Some(t) = all.get(name) {
                         r = r.with(t);
                     }
                 }
@@ -1149,6 +1889,9 @@ impl Conversation {
             Some(s) => s.to_string(),
             None => self.engine.system_prompt(&tools),
         };
+        let tool_env = self
+            .engine
+            .tool_environment(self.engine.model_supports_images(&model));
         Ok(AgentParams {
             http: self.engine.inner.http.clone(),
             provider,
@@ -1159,6 +1902,7 @@ impl Conversation {
             thinking: state.thinking,
             cwd: self.engine.cwd().to_path_buf(),
             hooks: self.engine.hooks().clone(),
+            tool_env,
         })
     }
 
@@ -1205,17 +1949,32 @@ impl Conversation {
     }
 
     fn finish_run(&self, emitter: &Emitter) {
-        let warnings = {
+        let (mut warnings, bash) = {
             let mut state = self.lock();
             state.running = None;
             state.events = None;
             state.pending.params_dirty = false;
-            Self::flush_pending(&mut state)
+            let warnings = Self::flush_pending(&mut state);
+            let bash = std::mem::take(&mut state.pending_bash);
+            (warnings, bash)
         };
+        for message in bash {
+            let message = AgentMessage::BashExecution(message);
+            if let Err(e) = self.append_context_message(&message) {
+                warnings.push(format!("Could not save session: {e:#}"));
+            }
+            emitter.message(&message);
+        }
         self.persist_goal_if_dirty();
         for w in warnings {
             emitter.emit(AgentEvent::Warning(w));
         }
+    }
+
+    fn append_context_message(&self, message: &AgentMessage) -> Result<()> {
+        let mut state = self.lock();
+        state.messages.push(message.clone());
+        state.session.append_message(message).map(|_| ())
     }
 
     async fn drive(
@@ -2100,6 +2859,279 @@ impl Conversation {
             UserContent::Text(goals::continuation_prompt(&goal)),
             false,
         )))
+    }
+}
+
+/// An extension known to the runtime, for `/status` and `/context`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtensionInfo {
+    pub name: String,
+    pub path: PathBuf,
+    pub manifest: Value,
+}
+
+/// Lines for the `/context memory` section, supplied by the memory runtime.
+pub type MemoryContextFn = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
+impl Engine {
+    /// Describe the loaded extensions (`/status`, `/context resources`).
+    pub fn set_extensions_info(&self, extensions: Vec<ExtensionInfo>) {
+        *self.inner.extensions.write().expect("extensions lock") = extensions;
+    }
+
+    pub fn extensions_info(&self) -> Vec<ExtensionInfo> {
+        self.inner
+            .extensions
+            .read()
+            .expect("extensions lock")
+            .clone()
+    }
+
+    /// Install the memory runtime's `/context memory` lines.
+    pub fn set_memory_context(&self, provider: Option<MemoryContextFn>) {
+        *self.inner.memory_context.write().expect("memory lock") = provider;
+    }
+
+    pub fn memory_context_lines(&self) -> Option<Vec<String>> {
+        let provider = self
+            .inner
+            .memory_context
+            .read()
+            .expect("memory lock")
+            .clone();
+        provider.map(|f| f())
+    }
+
+    /// The most recent provider request of any conversation (JSON view),
+    /// for `/context messages`.
+    pub fn last_provider_request(&self) -> Option<Value> {
+        self.inner
+            .last_request
+            .read()
+            .expect("request lock")
+            .clone()
+    }
+}
+
+/// JSON view of a provider request.
+fn request_json(request: &provider::Request) -> Value {
+    json!({
+        "model": request.model,
+        "system": request.system,
+        "messages": request.messages,
+        "tools": request
+            .tools
+            .iter()
+            .map(|t| json!({"name": t.name, "description": t.description, "parameters": t.parameters}))
+            .collect::<Vec<_>>(),
+        "maxTokens": request.max_tokens,
+        "thinking": request.thinking.as_str(),
+    })
+}
+
+/// A running user `!command`.
+pub struct UserBash {
+    /// Output tail while the command runs.
+    pub output: Receiver<String>,
+    /// The recorded `bashExecution` message.
+    pub result: JoinHandle<BashExecutionMessage>,
+}
+
+impl Conversation {
+    /// Every tool the engine offers (active or not).
+    pub fn tool_set(&self) -> ToolRegistry {
+        self.engine.tools()
+    }
+
+    /// Enable or disable one tool (`/tools` toggle).
+    pub fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<()> {
+        let mut active = self.active_tools();
+        active.retain(|n| n != name);
+        if enabled {
+            if self.engine.tools().get(name).is_none() {
+                bail!("Unknown tool: {name}");
+            }
+            active.push(name.to_string());
+        }
+        self.set_active_tools(&active)
+    }
+
+    /// The system prompt the next run would send.
+    pub fn system_prompt(&self) -> String {
+        self.base_system_prompt()
+    }
+
+    /// Messages resolved from the session file (Pi `buildSessionContext`).
+    pub fn session_context_messages(&self) -> Vec<AgentMessage> {
+        self.lock().session.build_context().messages
+    }
+
+    /// Model and thinking level recorded on the current branch.
+    pub fn session_context_settings(&self) -> (Option<ModelRef>, String) {
+        let ctx = self.lock().session.build_context();
+        (ctx.model, ctx.thinking_level)
+    }
+
+    /// Queued steering, follow-up and next-turn messages.
+    pub fn queued_messages(&self) -> Vec<AgentMessage> {
+        self.lock().queues.messages()
+    }
+
+    /// Problems found while loading the session file.
+    pub fn session_diagnostics(&self) -> Vec<String> {
+        self.lock().session.diagnostics().to_vec()
+    }
+
+    pub fn session_header(&self) -> session::SessionHeader {
+        self.lock().session.header().clone()
+    }
+
+    /// Text of the latest assistant answer (`/copy`).
+    pub fn last_assistant_text(&self) -> Option<String> {
+        crate::export::last_assistant_text(&self.lock().messages)
+    }
+
+    /// Prompts typed in this session, newest first (consecutive duplicates
+    /// collapsed), for Up/Down history.
+    pub fn prompt_history(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for entry in self.lock().session.entries().iter().rev() {
+            if let Some(text) = entry
+                .message()
+                .filter(|m| m.is_user())
+                .and_then(AgentMessage::user_text)
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                && out.last() != Some(&text)
+            {
+                out.push(text);
+            }
+        }
+        out
+    }
+
+    /// The whole session (every branch) as HTML.
+    pub fn export_html_string(&self) -> String {
+        let state = self.lock();
+        let path = state.session.path().display().to_string();
+        crate::export::render_session_html(state.session.header(), state.session.entries(), &path)
+    }
+
+    /// Export to HTML at `path`, or `qt-session-<id>.html` in the working
+    /// directory. Returns the written path.
+    pub fn export_html(&self, path: Option<&Path>) -> Result<PathBuf> {
+        let target = match path {
+            Some(p) => p.to_path_buf(),
+            None => self
+                .engine
+                .cwd()
+                .join(crate::export::default_html_filename(&self.session_path())),
+        };
+        crate::export::write_export(&target, &self.export_html_string())?;
+        Ok(target)
+    }
+
+    /// Export the session as JSONL (header and all entries).
+    pub fn export_jsonl(&self, path: &Path) -> Result<()> {
+        let text = {
+            let state = self.lock();
+            crate::export::render_session_jsonl(state.session.header(), state.session.entries())
+        };
+        crate::export::write_export(path, &text)
+    }
+
+    /// Whether a user `!command` is running.
+    pub fn is_bash_running(&self) -> bool {
+        self.lock().bash_running.is_some()
+    }
+
+    /// Cancel the running user `!command`.
+    pub fn abort_bash(&self) {
+        if let Some(token) = &self.lock().bash_running {
+            token.cancel();
+        }
+    }
+
+    /// Run a user `!command` (`!!command` with `exclude_from_context`). The
+    /// result is recorded as a `bashExecution` message: immediately when
+    /// idle, else when the running turn ends (Pi `recordBashResult`).
+    pub fn run_bash(&self, command: &str, exclude_from_context: bool) -> Result<UserBash> {
+        let command = command.trim().to_string();
+        if command.is_empty() {
+            bail!("Nothing to run");
+        }
+        let cancel = CancellationToken::new();
+        {
+            let mut state = self.lock();
+            if state.bash_running.is_some() {
+                bail!("A bash command is already running. Press Esc to cancel it first.");
+            }
+            state.bash_running = Some(cancel.clone());
+        }
+        let (tx, rx) = async_channel::unbounded();
+        let mut env = self.engine.tool_environment(None);
+        env.policy =
+            Arc::new(WorkspacePolicy::confined(self.engine.cwd()).with_external_access(true));
+        let ctx = env
+            .context(self.engine.cwd().to_path_buf())
+            .with_cancel(cancel)
+            .with_progress(Arc::new(move |text: String| {
+                let _ = tx.try_send(text);
+            }));
+        let conv = self.clone();
+        let result = self.engine.spawn(async move {
+            let mut message = crate::tools::execute_user_command(&command, &ctx).await;
+            message.exclude_from_context = exclude_from_context;
+            conv.record_bash_result(message.clone());
+            message
+        });
+        Ok(UserBash { output: rx, result })
+    }
+
+    /// Append a message to the context and session (tests only).
+    #[cfg(test)]
+    pub(crate) fn push_message_for_test(&self, message: AgentMessage) {
+        self.append_context_message(&message).expect("append");
+    }
+
+    /// Record a bash result run outside [`Self::run_bash`] (extensions).
+    pub fn record_bash_result(&self, message: BashExecutionMessage) {
+        let emitter = {
+            let mut state = self.lock();
+            state.bash_running = None;
+            if state.running.is_some() {
+                state.pending_bash.push(message);
+                return;
+            }
+            state.events.clone()
+        };
+        let message = AgentMessage::BashExecution(message);
+        let _ = self.append_context_message(&message);
+        if let Some(emitter) = emitter {
+            emitter.message(&message);
+        }
+    }
+
+    /// Process `@file` arguments and send the combined message (archived
+    /// `prepare_initial_message`). Error diagnostics abort the prompt.
+    pub fn prompt_with_files(
+        &self,
+        text: &str,
+        file_args: &[String],
+        stdin: Option<&str>,
+    ) -> Result<(Receiver<AgentEvent>, Vec<crate::input::FileDiagnostic>)> {
+        let auto_resize = self.engine.settings().image_auto_resize();
+        let files = crate::input::process_file_arguments(file_args, self.engine.cwd(), auto_resize);
+        if let Some(error) = files
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == crate::input::DiagnosticSeverity::Error)
+        {
+            bail!("{}", error.message);
+        }
+        let message = crate::input::build_initial_message(stdin, &files.text, Some(text));
+        let rx = self.prompt(&message, files.images)?;
+        Ok((rx, files.diagnostics))
     }
 }
 

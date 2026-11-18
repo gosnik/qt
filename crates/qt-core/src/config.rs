@@ -71,11 +71,75 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Read `settings.json`; when it does not exist, `settings.yaml` or
+    /// `settings.yml` (archived lookup order).
     pub fn load(home: &AgentHome) -> Result<Self> {
         Ok(Self {
-            raw: read_json_object(&home.settings_path())?,
+            raw: read_settings_object(home.root())?,
             home: Some(home.clone()),
         })
+    }
+
+    /// Settings from an already parsed object.
+    pub fn from_raw(raw: Map<String, Value>, home: Option<AgentHome>) -> Self {
+        Self { raw, home }
+    }
+
+    /// A copy with `overlay` deep-merged on top: objects merge key by key,
+    /// any other value replaces the base value.
+    pub fn merged_with(&self, overlay: &Map<String, Value>) -> Self {
+        let mut raw = self.raw.clone();
+        deep_merge(&mut raw, overlay);
+        Self {
+            raw,
+            home: self.home.clone(),
+        }
+    }
+
+    /// `enabledModels` patterns (Pi model scoping).
+    pub fn enabled_models(&self) -> Vec<String> {
+        self.raw
+            .get("enabledModels")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Replace `enabledModels`; an empty list removes the key.
+    pub fn set_enabled_models(&mut self, patterns: &[String]) {
+        if patterns.is_empty() {
+            self.raw.remove("enabledModels");
+        } else {
+            self.raw.insert("enabledModels".into(), json!(patterns));
+        }
+    }
+
+    /// `shellPath`: explicit shell for bash.
+    pub fn shell_path(&self) -> Option<String> {
+        self.str_key("shellPath")
+    }
+
+    /// `shellCommandPrefix`: prepended to every bash command.
+    pub fn shell_command_prefix(&self) -> Option<String> {
+        self.str_key("shellCommandPrefix")
+    }
+
+    /// `terminal.promptHistoryLimit` (default 500).
+    pub fn prompt_history_limit(&self) -> usize {
+        self.raw
+            .get("terminal")
+            .and_then(|t| t.get("promptHistoryLimit"))
+            .and_then(Value::as_u64)
+            .map(|v| v as usize)
+            .unwrap_or(crate::history::DEFAULT_PROMPT_HISTORY_LIMIT)
     }
 
     pub fn save(&self, home: &AgentHome) -> Result<()> {
@@ -241,6 +305,52 @@ impl Settings {
         self.set_ollama_instances(&instances);
         Ok(removed)
     }
+}
+
+/// Merge `overlay` into `base` recursively (objects by key, other values replace).
+pub fn deep_merge(base: &mut Map<String, Value>, overlay: &Map<String, Value>) {
+    for (key, value) in overlay {
+        match (base.get_mut(key), value) {
+            (Some(Value::Object(existing)), Value::Object(incoming)) => {
+                deep_merge(existing, incoming);
+            }
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+/// The settings file in `dir`: `settings.json`, else `settings.yaml`, else
+/// `settings.yml`, when one exists.
+pub fn existing_settings_file(dir: &Path) -> Option<PathBuf> {
+    ["settings.json", "settings.yaml", "settings.yml"]
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+/// Read the settings object stored in `dir` (JSON or YAML); missing files
+/// yield an empty object.
+pub fn read_settings_object(dir: &Path) -> Result<Map<String, Value>> {
+    match existing_settings_file(dir) {
+        Some(path) => read_settings_file(&path),
+        None => Ok(Map::new()),
+    }
+}
+
+/// Read one settings file, JSON or (by extension) YAML.
+pub fn read_settings_file(path: &Path) -> Result<Map<String, Value>> {
+    let is_yaml = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"));
+    if !is_yaml {
+        return read_json_object(path);
+    }
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    crate::yaml::parse_yaml_settings(&text)
+        .map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))
 }
 
 pub(crate) fn read_json_object(path: &Path) -> Result<Map<String, Value>> {

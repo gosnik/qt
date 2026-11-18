@@ -37,7 +37,7 @@ use crate::provider::ToolSpec;
 
 pub use append::AppendTextTool;
 pub use apply_patch::{ApplyPatchTool, PatchOperation, parse_patch};
-pub use bash::{BashOptions, BashTool};
+pub use bash::{BashOptions, BashTool, execute_user_command};
 pub use clipboard::{
     ClipboardCommandPlan, ClipboardTool, plan_clipboard_copy_commands,
     select_clipboard_copy_command,
@@ -207,6 +207,58 @@ impl ToolContext {
         } else {
             shown
         }
+    }
+}
+
+/// Settings-derived tool configuration shared by every call of a run; the
+/// agent loop turns it into a [`ToolContext`] per call.
+#[derive(Clone)]
+pub struct ToolEnvironment {
+    pub policy: Arc<WorkspacePolicy>,
+    pub mutation_policy: MutationPolicy,
+    pub mutation_queue: Option<Arc<MutationQueue>>,
+    pub output_guard: OutputGuardOptions,
+    pub bash: BashOptions,
+    pub images: ImageOptions,
+    pub web: WebOptions,
+}
+
+impl ToolEnvironment {
+    /// The archived secure default for `cwd` (see [`ToolContext::new`]).
+    pub fn confined(cwd: &Path) -> Self {
+        Self {
+            policy: Arc::new(WorkspacePolicy::confined(cwd)),
+            mutation_policy: MutationPolicy::Execute,
+            mutation_queue: None,
+            output_guard: OutputGuardOptions::default(),
+            bash: BashOptions::default(),
+            images: ImageOptions::default(),
+            web: WebOptions::default(),
+        }
+    }
+
+    /// A context for one call in `cwd`.
+    pub fn context(&self, cwd: impl Into<PathBuf>) -> ToolContext {
+        let mut ctx = ToolContext::new(cwd)
+            .with_policy(self.policy.clone())
+            .with_output_guard(self.output_guard)
+            .with_bash_options(self.bash.clone())
+            .with_image_options(self.images.clone())
+            .with_web_options(self.web.clone());
+        ctx.mutations.policy = self.mutation_policy;
+        ctx.mutations.queue = self.mutation_queue.clone();
+        ctx
+    }
+}
+
+impl std::fmt::Debug for ToolEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolEnvironment")
+            .field("policy", &self.policy)
+            .field("mutation_policy", &self.mutation_policy)
+            .field("bash", &self.bash)
+            .field("web", &self.web)
+            .finish_non_exhaustive()
     }
 }
 
