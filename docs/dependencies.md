@@ -25,6 +25,8 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `base64` | Image attachments, JWT payloads, PKCE |
 | `image` (png, jpeg, gif, webp, bmp) | Image dimension sniffing, EXIF orientation, resizing and re-encoding to provider limits |
 | `sha2` | SHA-256 for OAuth PKCE code challenges |
+| `unicode-normalization` | NFKC folding for the `edit` fuzzy-match fallback (Pi's `normalizeForFuzzyMatch`) |
+| `url` | URL parsing, redirect resolution and host classification for the web tools (already a `reqwest` dependency) |
 | `rand` | Session entry ids |
 | `libc` (unix) | Killing a bash process group on timeout or abort |
 | `tempfile` (dev) | Test fixtures |

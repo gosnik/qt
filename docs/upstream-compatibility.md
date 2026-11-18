@@ -92,7 +92,39 @@ archived C++ qt (`archived/`).
   archived qt.
 - **Tools:** names, JSON schemas, descriptions, prompt snippets and guidelines, the
   2000-line / 50 KB limits and continuation notices follow Pi's coding-agent tools. `edit`
-  accepts Pi's `edits[]` form and the legacy single `oldText`/`newText` form.
+  accepts Pi's `edits[]` form and the legacy single `oldText`/`newText` form. Bash
+  truncation notices use Pi's `[Showing lines S-E of T. Full output: <path>]` wording.
+- **Archived tool extras:** the archived qt's implementation names (`read_text`,
+  `write_text`, `edit_text`, `search_text`, `list_directory`, `find_files`) resolve to the
+  Pi-named tools, and its argument aliases are accepted (`file_path`/`filePath`, `text` for
+  `write` content, `old_string`/`oldString`/`new_string`/`newString`/`replace_all`, grep
+  `query`/`include`/`file_glob`/`-i`/`-A`/`-B`/`-C`/`literal_text`, find `glob`/`include`,
+  bash `cwd`/`working_dir`, apply_patch `patchText`). Advertised schemas stay Pi-shaped plus
+  the archived options (`edit` `replace_all`; grep `output_mode`, `head_limit`, `offset`,
+  `multiline`, `type`, `hidden`, `no_ignore`; find `type`, `directories`, `hidden`,
+  `no_ignore`; ls `recursive`, `depth`, `ignore`; bash `timeout_ms`, `workdir`). The
+  archived-only tools `append_text`, `apply_patch`, `clipboard`, `complete_path`,
+  `package_manager` (detect and plan only), `web_fetch`, `web_search` and `web_run` are
+  available through `ToolRegistry::builtin()`; `--tools` globs, `--no-tools`,
+  `--no-builtin-tools` and offline mode are modelled by `ToolSelection`.
+- **Workspace policy:** `workspaceRoot` (default: enclosing git repository, else cwd) and
+  `allowExternalFilesystemAccess` (global settings only; `.pi/settings.json` may only narrow)
+  confine every path argument and the bash working directory, with symlinks resolved. Refusals
+  read `path escapes workspace_root: <path>` / `working directory escapes workspace_root`.
+  `ToolContext::new(cwd)` confines to `cwd`. The prompt sentence matches the archived
+  `<tool_permissions>` text.
+- **Mutation queue:** with `MutationPolicy::Queue`, `write`, `edit`, `append_text`,
+  `apply_patch` and `bash` return a `pending_approval` result with a `mutation-<n>` id;
+  approved mutations re-run once via `ToolRegistry::execute_approved`.
+- **Read guard:** the second and third identical reads of an unchanged file range carry the
+  archived "This unchanged file range has already been read." warning and the fourth is
+  refused with the archived `read_text refused a duplicate unchanged read…` message.
+- **Web tools:** the public-URL policy (no credentials, localhost, private/reserved IPv4,
+  IPv6 literals; every resolved address must be public; connections pinned to the checked
+  addresses), five-redirect limit, 2 MiB download cap, simplified-text conversion,
+  DuckDuckGo `uddg` decoding, `web_run` `turnNsearchM` / `turnNfetchM` ref ids and limits
+  follow the archived qt. `PI_OFFLINE` or offline mode disables them with
+  `web access is disabled in offline mode`.
 - **System prompt:** Pi's structure, with "qt" in place of "pi" and without the Pi
   documentation section. Context files are searched in the same way (`AGENTS.md`, then
   `CLAUDE.md`, per ancestor directory), plus the global `~/.qt/AGENTS.md`.
@@ -121,17 +153,25 @@ archived C++ qt (`archived/`).
 - **Manual `/compact`** refuses to run while the agent is running instead of aborting it.
 - **Events:** one `AgentStart` / `AgentEnd` pair spans a whole prompt including retries,
   compaction and follow-ups (Pi emits `agent_end` per loop run).
-- **`edit` fallback:** when an exact match fails, qt matches line by line, ignoring trailing
-  whitespace and typographic quote, dash and space variants, and replaces the original
-  lines. Pi applies its replacement to fuzzy-normalised file content instead.
+- **`edit` fallback:** when an exact match fails, qt matches line by line on NFKC-folded
+  text, ignoring trailing whitespace and typographic quote, dash and space variants, and
+  replaces the original lines. Pi and the archived qt apply the replacement to
+  fuzzy-normalised file content instead. `replace_all` replaces every non-overlapping match;
+  without it Pi's uniqueness errors apply.
 - **`grep` / `find`:** implemented in-process with the `ignore` crate rather than by calling
-  `rg`/`fd`. Output format is `path:line: text` (matches) and `path-line- text` (context).
-  Hidden files are skipped, as with ripgrep's defaults.
-- **`read`:** images over 5 MB are rejected rather than resized.
-- **Replaying history:** Pi's `transformMessages` rules apply (foreign thinking becomes
-  text, tool-call ids are normalised per API, missing tool results get a synthetic
-  "No result provided" error). In addition, tool results without a matching call are dropped.
-  Assistant turns containing only reasoning are still omitted from chat-completions requests.
+  `rg`/`fd`. Output format is `path:line: text` (matches) and `path-line- text` (context),
+  with `--` between separated context groups. Hidden files are skipped unless `hidden` is
+  set (`.git` is always skipped). `find` lists files only unless `directories` is set or
+  `type` is `d`, and never descends into `node_modules` (archived behaviour). grep
+  `multiline` really spans lines (the archived qt accepted the flag but ignored it).
+- **`read`:** directories return their listing (archived) instead of an error; missing
+  files suggest similarly named siblings. Images are detected by content. Without a resize
+  hook (`ImageOptions::resize`, owned by the image subsystem) images over 5 MB are omitted
+  with a note rather than resized.
+- **Replaying history:** assistant turns containing only reasoning are omitted from
+  OpenAI-compatible requests, because some servers (Ollama) reject assistant messages that
+  have neither content nor tool calls. Thinking blocks are replayed to Anthropic only when
+  they carry a signature from Anthropic.
 - **Responses text ids:** message items are replayed with `msg_<index>` ids because text
   blocks have no `textSignature` field yet; the original item id and `phase` are not kept.
 - **Ollama:** provider ids are always `ollama:<id>` (the first Rust milestone used a bare
@@ -145,6 +185,19 @@ archived C++ qt (`archived/`).
 - **Codex transport:** SSE only; Pi's WebSocket transport is not implemented.
 - **Out of scope:** Google/Vertex, Bedrock, Mistral and GitHub Copilot keep their catalog
   records but have no transport and are not offered as providers.
+- **`ls`:** recursive listings do not follow symlinked directories or list `.git` contents.
+- **`bash`:** runs `/bin/bash -lc` when available (archived), else `bash -lc` from `PATH`,
+  else `/bin/sh -c`. Relative `workdir` values resolve against the workspace root. The full
+  output of truncated commands is written to `qt-bash-<id>.log` in the temp directory and
+  stays readable by `read` even outside the workspace.
+- **`apply_patch`:** each `@@` hunk is matched separately and in order (the archived qt
+  concatenated all hunks of a file into one block); `*** Move to:` and `*** End of File` are
+  supported; a bare empty line inside a hunk is an empty context line. The result text is
+  Codex's `Success. Updated the following files:` list.
+- **`web_fetch`:** non-HTML responses are returned as-is (the archived qt stripped tags from
+  every response); bodies over the cap are cut with a note instead of failing; HTTP errors
+  are reported as tool errors. URL fragments are dropped instead of rejected.
+- **`clipboard`:** image copies pass `-t <mime>` to xclip and `--type <mime>` to wl-copy.
 - **Not yet implemented** (see `PLAN.md`): GUI tree / fork / resume pickers and the
   missing-cwd dialog, provider-level retry (`retry.provider.*`, `Retry-After`), slash commands, skills, OAuth
   logins, in-process llama.cpp, memory, extensions, MCP, subagents, the project index and

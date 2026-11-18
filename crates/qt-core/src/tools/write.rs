@@ -2,8 +2,8 @@ use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::mutation::{MutationKind, require_approval};
 use super::{Tool, ToolContext, ToolOutput, parse_args};
-use crate::util::{display_path, resolve_path};
 
 pub struct WriteTool;
 
@@ -37,14 +37,26 @@ impl Tool for WriteTool {
         })
     }
 
-    fn execute(&self, args: Value, ctx: ToolContext) -> BoxFuture<'static, ToolOutput> {
+    fn execute(&self, raw: Value, ctx: ToolContext) -> BoxFuture<'static, ToolOutput> {
         Box::pin(async move {
-            let args: Args = match parse_args("write", args) {
+            let args: Args = match parse_args("write", raw.clone()) {
                 Ok(a) => a,
                 Err(e) => return e,
             };
-            let path = resolve_path(&ctx.cwd, &args.path);
-            let shown = display_path(&ctx.cwd, &path);
+            let path = match ctx.resolve_path(&args.path) {
+                Ok(r) => r.path,
+                Err(e) => return e,
+            };
+            let shown = ctx.display(&path);
+            if let Some(queued) = require_approval(
+                &ctx,
+                MutationKind::FileWrite,
+                "write",
+                format!("write {} bytes to {shown}", args.content.len()),
+                &raw,
+            ) {
+                return queued;
+            }
             if let Some(parent) = path.parent()
                 && let Err(e) = tokio::fs::create_dir_all(parent).await
             {
@@ -70,12 +82,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn writes_with_parent_dirs() {
+    async fn writes_with_parent_dirs_inside_the_workspace_only() {
         let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(dir.path());
         let out = WriteTool
             .execute(
                 json!({"path": "a/b/c.txt", "content": "hello"}),
-                ToolContext::new(dir.path()),
+                ctx.clone(),
             )
             .await;
         assert!(!out.is_error, "{}", out.text_content());
@@ -87,5 +100,19 @@ mod tests {
             std::fs::read_to_string(dir.path().join("a/b/c.txt")).unwrap(),
             "hello"
         );
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("x.txt");
+        let out = WriteTool
+            .execute(
+                json!({"path": target.to_str().unwrap(), "content": "x"}),
+                ctx,
+            )
+            .await;
+        assert!(out.is_error);
+        assert!(
+            out.text_content()
+                .starts_with("path escapes workspace_root")
+        );
+        assert!(!target.exists());
     }
 }

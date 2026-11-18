@@ -16,6 +16,7 @@ pub mod harness;
 pub mod images;
 pub mod message;
 pub mod ollama;
+pub mod policy;
 pub mod prompt;
 pub mod provider;
 pub mod session;
