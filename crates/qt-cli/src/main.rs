@@ -1,253 +1,168 @@
-//! `qt-cli`: run one prompt without the GUI and stream the answer to stdout.
+//! `qt-cli`: the headless qt front end (archived `main.cpp` /
+//! `cli_startup.cpp`): print and JSON modes, `--list-models`, `--export`,
+//! session selection and the `install`/`remove`/`update`/`list`/`config`/
+//! `memory` subcommands. The interactive interface is the desktop app.
 
-use std::io::{IsTerminal as _, Read as _, Write as _};
-use std::path::PathBuf;
+mod args;
+mod help;
+mod list_models;
+mod run;
+mod session;
+
+use std::io::{IsTerminal as _, Write as _};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{Context as _, Result, bail};
-use qt_core::provider::{ModelRef, StreamEvent, ThinkingLevel};
-use qt_core::{AgentEvent, AgentHome, ContentBlock, Engine, Message, StopReason};
+use qt_core::config::AgentHome;
+use qt_core::logging::{LoggingOptions, init_logging};
 
-const USAGE: &str = "\
-Usage: qt-cli [options] <prompt...>
-
-Runs one prompt through the qt agent in the current directory and prints the
-answer. Reads the prompt from stdin when none is given.
-
-Options:
-  -m, --model <provider/id>   Model to use (default: settings defaultProvider/defaultModel)
-  -t, --thinking <level>      off | minimal | low | medium | high | xhigh
-  -c, --continue              Continue the most recent session (this directory first)
-  -s, --session <path|id>     Continue a session file or session id prefix
-      --fork <path|id>        Copy a session into a new one and continue there
-      --session-dir <dir>     Session directory (overrides PI_CODING_AGENT_SESSION_DIR
-                              and the sessionDir setting)
-      --no-session            Do not save this conversation
-      --cwd <dir>             Working directory (default: current directory)
-      --list-models           List models from configured providers and exit
-      --list-sessions         List sessions for the working directory and exit
-  -h, --help                  Show this help
-";
-
-#[derive(Default)]
-struct Options {
-    model: Option<ModelRef>,
-    thinking: ThinkingLevel,
-    continue_last: bool,
-    session: Option<String>,
-    fork: Option<String>,
-    session_dir: Option<PathBuf>,
-    no_session: bool,
-    cwd: Option<PathBuf>,
-    list_models: bool,
-    list_sessions: bool,
-    prompt: Vec<String>,
-}
-
-fn parse_args() -> Result<Option<Options>> {
-    let mut opts = Options::default();
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        let mut value = |name: &str| args.next().with_context(|| format!("{name} needs a value"));
-        match arg.as_str() {
-            "-h" | "--help" => return Ok(None),
-            "-m" | "--model" => {
-                let spec = value("--model")?;
-                opts.model = Some(
-                    ModelRef::parse(&spec)
-                        .with_context(|| format!("expected provider/model, got {spec:?}"))?,
-                );
-            }
-            "-t" | "--thinking" => {
-                let level = value("--thinking")?;
-                opts.thinking = ThinkingLevel::parse(&level)
-                    .with_context(|| format!("unknown thinking level {level:?}"))?;
-            }
-            "-c" | "--continue" => opts.continue_last = true,
-            "-s" | "--session" => opts.session = Some(value("--session")?),
-            "--fork" => opts.fork = Some(value("--fork")?),
-            "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
-            "--no-session" => opts.no_session = true,
-            "--cwd" => opts.cwd = Some(PathBuf::from(value("--cwd")?)),
-            "--list-models" => opts.list_models = true,
-            "--list-sessions" => opts.list_sessions = true,
-            "--" => {
-                opts.prompt.extend(args.by_ref());
-                break;
-            }
-            other if other.starts_with('-') && other.len() > 1 => {
-                bail!("unknown option {other}\n\n{USAGE}")
-            }
-            other => opts.prompt.push(other.to_string()),
-        }
-    }
-    Ok(Some(opts))
-}
+use crate::args::{Severity, StartupMode};
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("qt-cli: {err:#}");
-            ExitCode::from(2)
-        }
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    // SAFETY: single-threaded at this point; children inherit the marker.
+    unsafe { std::env::set_var("PI_CODING_AGENT", "true") };
+    let logging = LoggingOptions::from_args(&raw);
+    if let Err(e) = init_logging(&logging) {
+        eprintln!("qt-cli: cannot open log file: {e}");
+    }
+    tracing::info!(target: "qt_cli", argc = raw.len(), "process_start");
+    let code = run(&raw);
+    tracing::info!(target: "qt_cli", code, "process_exit");
+    let _ = std::io::stdout().flush();
+    ExitCode::from(code.clamp(0, 255) as u8)
+}
+
+fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn resolve(cwd: &Path, path: &str) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        path.to_string()
+    } else {
+        cwd.join(p).to_string_lossy().into_owned()
     }
 }
 
-fn run() -> Result<ExitCode> {
-    let Some(opts) = parse_args()? else {
-        print!("{USAGE}");
-        return Ok(ExitCode::SUCCESS);
-    };
-    let cwd = match opts.cwd {
-        Some(dir) => dir,
-        None => std::env::current_dir()?,
-    };
-    let engine = Engine::new(AgentHome::from_env(), cwd)?;
-    engine.set_session_dir(opts.session_dir.clone());
-
-    if opts.list_models {
-        for (provider, result) in engine.block_on(engine.list_models())? {
-            match result {
-                Ok(models) => models.iter().for_each(|m| println!("{provider}/{}", m.id)),
-                Err(err) => eprintln!("{provider}: {err}"),
-            }
-        }
-        return Ok(ExitCode::SUCCESS);
+fn run(raw: &[String]) -> i32 {
+    let cwd = current_dir();
+    let home = AgentHome::from_env();
+    if raw.first().map(String::as_str) == Some("memory") {
+        return run::memory_command(&raw[1..], &cwd, &home);
     }
-    if opts.list_sessions {
-        for s in engine.sessions() {
-            println!("{}\t{}", s.path.display(), s.title);
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    let mut prompt = opts.prompt.join(" ");
-    if prompt.trim().is_empty() && !std::io::stdin().is_terminal() {
-        std::io::stdin().read_to_string(&mut prompt)?;
-    }
-    if prompt.trim().is_empty() {
-        bail!("no prompt given\n\n{USAGE}");
-    }
-
-    let conversation = if opts.no_session {
-        engine.new_ephemeral_conversation(engine.default_model())
-    } else if let Some(source) = &opts.fork {
-        engine.fork_session(&engine.resolve_session(source)?)?
-    } else if let Some(arg) = &opts.session {
-        let path = engine.resolve_session(arg)?;
-        if path.exists() {
-            if let Some(issue) = engine.session_cwd_issue(&path) {
-                bail!("{}", issue.error_text());
-            }
-            engine.open_conversation(&path)?
-        } else {
-            bail!("No session found matching '{arg}'");
-        }
-    } else if opts.continue_last {
-        engine.continue_recent(engine.default_model())?
-    } else {
-        engine.new_conversation(engine.default_model())
-    };
-    if let Some(model) = opts.model {
-        conversation.set_model(model);
-    }
-    conversation.set_thinking(opts.thinking);
-
-    let rx = conversation.prompt(&prompt, Vec::new())?;
-    let failed = engine.block_on(async move {
-        let mut stdout = std::io::stdout();
-        let mut failed = false;
-        let mut text_open = false;
-        while let Ok(event) = rx.recv().await {
-            match event {
-                AgentEvent::Stream(StreamEvent::TextDelta { delta, .. }) => {
-                    print!("{delta}");
-                    text_open = !delta.ends_with('\n');
-                    let _ = stdout.flush();
-                }
-                AgentEvent::ToolStart(exec) => {
-                    if text_open {
-                        println!();
-                        text_open = false;
-                    }
-                    eprintln!("→ {} {}", exec.name, compact_args(&exec.args));
-                }
-                AgentEvent::MessageEnd(Message::ToolResult(r)) if r.is_error => {
-                    let first = r.text().lines().last().unwrap_or_default().to_string();
-                    eprintln!("  ✗ {first}");
-                }
-                AgentEvent::MessageEnd(Message::Assistant(a)) => {
-                    if a.stop_reason == StopReason::Error {
-                        eprintln!("error: {}", a.error_message.unwrap_or_default());
-                        failed = true;
-                    } else if a.stop_reason == StopReason::Aborted {
-                        failed = true;
-                    }
-                    // Keep image-only or empty answers visible as a newline boundary.
-                    if a.content
-                        .iter()
-                        .any(|b| matches!(b, ContentBlock::Text { .. }))
-                        && text_open
-                    {
-                        println!();
-                        text_open = false;
-                    }
-                }
-                AgentEvent::Warning(w) => eprintln!("warning: {w}"),
-                AgentEvent::RetryStart {
-                    attempt,
-                    max_attempts,
-                    delay_ms,
-                    error,
-                } => eprintln!(
-                    "retrying ({attempt}/{max_attempts}) in {:.1}s: {error}",
-                    delay_ms as f64 / 1000.0
-                ),
-                AgentEvent::CompactionStart { reason } => {
-                    eprintln!("compacting context ({})…", reason.as_str())
-                }
-                AgentEvent::CompactionEnd {
-                    error: Some(error), ..
-                } => eprintln!("{error}"),
-                AgentEvent::AgentEnd { usage, .. } => {
-                    eprintln!(
-                        "[{} in / {} out tokens{}]",
-                        usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens,
-                        usage.output_tokens,
-                        if usage.total_cost_usd > 0.0 {
-                            format!(", ${:.4}", usage.total_cost_usd)
-                        } else {
-                            String::new()
-                        }
-                    );
-                }
-                _ => {}
-            }
-        }
-        failed
-    });
-    eprintln!("session: {}", conversation.session_path().display());
-    Ok(if failed {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    })
-}
-
-fn compact_args(args: &serde_json::Value) -> String {
-    let text = match args
-        .get("command")
-        .or_else(|| args.get("path"))
-        .or_else(|| args.get("pattern"))
     {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        _ => args.to_string(),
-    };
-    let first = text.lines().next().unwrap_or_default();
-    if first.chars().count() > 120 {
-        format!("{}…", first.chars().take(119).collect::<String>())
-    } else {
-        first.to_string()
+        let stdout = &mut std::io::stdout();
+        let stderr = &mut std::io::stderr();
+        if let Some(code) = qt_extensions::packages::run_package_command(
+            raw,
+            &cwd,
+            home.root(),
+            qt_extensions::packages::PackageRunOptions::default(),
+            stdout,
+            stderr,
+        ) {
+            return code;
+        }
+    }
+    let mut parsed = args::parse(raw);
+    if parsed.offline || std::env::var("PI_OFFLINE").is_ok_and(|v| v == "1") {
+        parsed.offline = true;
+        // SAFETY: no other threads read the environment concurrently here.
+        unsafe {
+            std::env::set_var("PI_OFFLINE", "1");
+            std::env::set_var("PI_SKIP_VERSION_CHECK", "1");
+        }
+    }
+    let mut failed = false;
+    for (severity, message) in &parsed.diagnostics {
+        match severity {
+            Severity::Error => {
+                eprintln!("Error: {message}");
+                failed = true;
+            }
+            Severity::Warning => eprintln!("Warning: {message}"),
+        }
+    }
+    if failed {
+        return 1;
+    }
+    if parsed.version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    if parsed.help {
+        if args::startup_mode(&parsed, stdin_is_tty) == StartupMode::Interactive {
+            print!("{}", help::HELP);
+        } else {
+            eprint!("{}", help::HELP);
+        }
+        return 0;
+    }
+    let migrations = qt_core::migrations::run_startup_migrations(&cwd, &home);
+    tracing::debug!(target: "qt_cli", ?migrations, "startup_migrations");
+    if let Some(export) = &parsed.export {
+        return run::export(export, parsed.messages.first().map(String::as_str), &cwd);
+    }
+    if parsed.list_models.is_some() || parsed.list_models_all {
+        return list_models::run(&parsed, &cwd, &home);
+    }
+    let mode = args::startup_mode(&parsed, stdin_is_tty);
+    if mode == StartupMode::Rpc && !parsed.file_args.is_empty() {
+        eprintln!("Error: @file arguments are not supported in RPC mode");
+        return 1;
+    }
+    if parsed.fork.is_some() {
+        let mut conflicts = Vec::new();
+        if parsed.session.is_some() {
+            conflicts.push("--session");
+        }
+        if parsed.continue_session {
+            conflicts.push("--continue");
+        }
+        if parsed.resume {
+            conflicts.push("--resume");
+        }
+        if parsed.no_session {
+            conflicts.push("--no-session");
+        }
+        if !conflicts.is_empty() {
+            eprintln!(
+                "Error: --fork cannot be combined with {}",
+                conflicts.join(", ")
+            );
+            return 1;
+        }
+    }
+    if parsed.api_key.is_some() && parsed.model.is_none() && parsed.models.is_empty() {
+        eprintln!(
+            "Error: --api-key requires a model to be specified via --model, --provider/--model, or --models"
+        );
+        return 1;
+    }
+    if mode == StartupMode::Rpc {
+        eprintln!(
+            "Error: RPC mode is not available in qt-cli yet; use --mode json or the qt desktop app"
+        );
+        return 1;
+    }
+    if let Err(message) = run::check_memory_child(&parsed) {
+        eprintln!("Error: {message}");
+        return 1;
+    }
+    let options = run::runtime_options(&parsed, mode, &cwd, &home);
+    run::main(parsed, mode, stdin_is_tty, options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_paths_resolve_against_cwd() {
+        assert_eq!(resolve(Path::new("/w"), "a/b"), "/w/a/b");
+        assert_eq!(resolve(Path::new("/w"), "/x"), "/x");
     }
 }

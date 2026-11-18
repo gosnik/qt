@@ -251,8 +251,13 @@ archived C++ qt (`archived/`).
 
 ## In-process llama.cpp (`qt-llama`)
 
-The `qt-llama` crate ports the archived qt llama integration as a library; it is not yet
-wired into the engine, model picker or a `/llama` panel.
+The `qt-llama` crate ports the archived qt llama integration. `LlamaProviderBackend` serves
+the `llama` provider through qt-core's provider backends (runs, compaction, summaries, the
+model picker and `--list-models`); its models are `settings.llama.models` plus models found by
+`--discover-local-models` (persisted to `settings.json` as archived and registered for the
+process even when persisting fails). The runtime is created on first use and replaced when the
+effective llama settings change. The GUI `/llama` panel is not built yet (`/llama status`,
+`models` and `discover` are answered by `qt-runtime`).
 
 - **Compatible:** `settings.llama` keys, defaults, error and validation messages; path
   resolution from the settings file directory with `~`; GGUF discovery roots, ids,
@@ -305,8 +310,12 @@ Ported from the archived `index` subsystem and `tools/index_tool.cpp`.
   nanoseconds rather than `file_time_type` ticks, so an archived manifest triggers a
   one-time reparse.
 - **Fingerprints:** per-file `fnv1a64:` fingerprints are always recorded (the archived
-  service did so only when memory code retrieval was enabled). The memory retrieval
-  snapshot itself belongs to the governed-memory milestone.
+  service did so only when memory code retrieval was enabled). `qt-runtime` projects the
+  scan and code index into the memory `CodeSnapshot` exactly as the archived
+  `RetrievalSnapshot::build` (node ids, 48-line file windows, 16/32-line symbol windows,
+  signature discriminators, `contains_file`/`defines`/`calls` edges, ambiguity suffixes),
+  rebuilt per index generation. Code-recall lexical matches use exact symbol names (the
+  archived FTS-backed `retrieval_search` provider is not ported).
 - **Fixes:** `.gitignore` rules are re-read on every scan (the archived matcher cached them
   for the life of the process); an FTS5 syntax error now surfaces as
   `invalid FTS5 query: ...` instead of silently returning no matches; scans triggered by
@@ -360,9 +369,9 @@ Pi has no persistent-memory contract; the archived qt is the reference.
     the interactive 10 000-row history cap and failed for backups (limit 100 000).
   - Lenient JSON readers: a field of the wrong type in an imported document falls back to
     its default instead of aborting the import.
-- **Not yet ported:** recall (lexical, graph, dense, code), context rendering, the
-  pre-handler, capture/ingestion, post-processing, Dreaming, research, the verifier, memory
-  tools, the `qt memory` CLI and the GUI.
+- **Wiring:** recall, capture, the memory tools, Dreaming and the `qt-cli memory` command are
+  wired by `qt-runtime` (see the composition-root section). The GUI `/memory` panel and the
+  native dashboard are not built yet.
 
 ## Core integration (`qt-core` engine, settings, slash commands, export, events)
 
@@ -436,6 +445,19 @@ Pi has no persistent-memory contract; the archived qt is the reference.
   may not be written yet). JSONL export writes the header and all entries. `/share` uses
   `gh` and `PI_SHARE_VIEWER_URL` with the archived messages; the temporary
   `session.html` lives in a private temp subdirectory.
+- **Lifecycle hooks:** besides the agent-loop hooks, `Hooks` carries the front-end events
+  extensions need: `input` (`Engine::process_input`), `session_before_switch`
+  (`Engine::allow_session_switch`), `session_before_fork` (run by `Conversation::fork`;
+  cancel or skip restoring the selected text), `session_before_tree` (run by
+  `navigate_tree`; cancel or override instructions, label and the summary),
+  `model_select` (`Conversation::select_model` with source `set`/`cycle`/`restore`),
+  `thinking_level_select`, `user_bash`, `resources_discover` (extra skill, prompt and theme
+  paths at startup and reload), `instructions_loaded`, `session_shutdown` with Pi's reason
+  and target (`Conversation::shutdown_with`), `message_end` replacement and `tool_call`
+  argument rewriting, plus a conversation-created listener for composition roots.
+  Model-context augmentors run on a blocking thread, and fallible augmentors can abort a
+  request. `Conversation::usage` is recomputed after tree navigation. `--api-key` uses
+  `Engine::set_runtime_api_key` (not saved).
 - **JSON events:** `events_json::PiEventSerializer` maps `AgentEvent`s to Pi
   `AgentSessionEvent` lines. `AgentEvent` gained `TurnStart` / `TurnEnd`. Block `*_end`
   events are synthesised when the next block starts or the message ends; Pi's `done` /
@@ -500,8 +522,9 @@ documented in [extensions.md](extensions.md).
     defers them to the next save point instead of rejecting them.
   - Lifecycle events are delivered through qt-core hooks. `turn_start`/`turn_end` are
     derived from assistant-response boundaries; `message_end` and `tool_call` results
-    cannot replace the message or the tool input (qt-core hooks do not support it),
-    only block; `before_provider_request` patches `systemPrompt`, `messages`,
+    can replace the message (same role; Pi `MessageEndEventResult`) and `tool_call`
+    results can block or replace the input with `{input}` (Pi mutates `event.input`);
+    later handlers see the replacement; `before_provider_request` patches `systemPrompt`, `messages`,
     `maxTokens` and `temperature` of qt's request rather than a provider payload.
   - Packages: install/remove/update run the npm/git commands (the archived CLI only
     printed them; `PackageRunOptions { execute: false }` restores that), and user-scope
@@ -510,12 +533,19 @@ documented in [extensions.md](extensions.md).
     in-process instead of running `rm -rf`.
   - `ctx.ui.getEditorComponent` reports the presenter's component;
     `ctx.ui.onTerminalInput` (terminal-only) is unsupported except for clearing.
-- **Not yet wired** (owned by the composition root / front ends): registering
-  `Extensions::tools()` with the engine, `install_hooks`, the `-e` /
-  `--no-extensions` / extension-flag CLI parsing, `run_package_command` as
-  `qt install|remove|update|list|config`, the slash-command registry, a GPUI
-  `ExtensionUi` (dialogs, status, widgets, header/footer, components,
-  autocomplete, renderers, shortcuts), `/extensions` package toggles and `/reload`.
+- **Wiring** (`qt-runtime`): extensions are discovered with `-e` / `--no-extensions`,
+  their tools are a dynamic tool source, `install_hooks` covers every lifecycle event
+  including the front-end ones qt-core now exposes (`input`, `session_before_switch`,
+  `session_before_fork`, `session_before_tree`, `model_select`,
+  `thinking_level_select`, `user_bash`, `resources_discover`, `instructions_loaded`,
+  `session_shutdown` with its reason), commands go into the slash registry, registered flags
+  resolve unknown CLI `--flags`, providers are served by a provider backend, the host is a
+  `ConversationHost` over the active conversation and `ctx.ui.*` uses the pluggable
+  `ExtensionUi` (headless by default). `qt-cli install|remove|uninstall|update|list|config`
+  run the package commands.
+- **Not yet wired:** a GPUI `ExtensionUi` (dialogs, status, widgets, header/footer,
+  components, autocomplete, renderers, shortcuts), `/extensions` package toggles and the
+  GUI's `/reload` (the runtime offers `Runtime::reload`).
 
 ## Governed memory: recall, context and capture (`qt-memory`, wave 2A)
 
@@ -562,8 +592,11 @@ The archived qt is the reference (`recall_service`, `retrieval_*`, `dense_retrie
   - The logical input sequence is the number of user messages in the request and the
     projection epoch is a hash of the earlier user inputs (qt-core has no projection
     epoch); recall still runs once per user input.
-  - `memory.prehandler.failOpen = false` cannot abort a request: qt-core model-context
-    augmentors cannot fail, so a failed augmentation always proceeds without memory.
+  - `memory.prehandler.failOpen = false` makes recall fail-closed: a failed augmentation
+    (store or recall error) aborts the request with `memory recall failed: <error>` as an
+    assistant error, and a memory runtime that cannot open aborts startup with
+    `unable to initialize built-in memory: <error>` (archived). A failed or invalid
+    pre-handler child still falls back to the deterministic context, as archived.
   - Code recall reads a `CodeSnapshot` supplied by the project index and a lexical provider;
     without an index FTS provider only exact symbol names match.
   - `/memory scan-skills` and the views (menu, dashboard, settings, review inbox, folder
@@ -678,6 +711,53 @@ Pi's subagent extension example supplies the child JSON contract.
     output lines) instead of JSON snapshots.
   - Cancellation kills the child's process group (the Linux descendant walk across
     process groups is not ported). A persistent `wait` ends when the parent aborts.
+
+## Composition root and CLI (`qt-runtime`, `qt-cli`)
+
+The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_mode.cpp` and
+`main.cpp` are the reference.
+
+- **Runtime:** `Runtime::build(RuntimeOptions)` loads settings, runs the startup migrations,
+  loads extensions, builds the llama backend (with the archived memory-child overrides:
+  8192-token context, up to 16 threads, task temperature/seed/output bound, KV cache off and
+  the task grammar; `QT_MEMORY_FORCE_CPU`), the project index tools (the background scanner
+  only starts for interactive use), the memory runtime (`memory.*` mapped as archived,
+  `resolve_memory_task_models`, the pre-handler and consolidation children, Dreaming with
+  post-processing at 500 records / 100 pairs and semantic consolidation, dense embeddings
+  through llama.cpp, `/context memory` lines), MCP servers with sampling through the active
+  model, the `subagent` tool (one persistent-worker coordinator per parent session) and the
+  extension wiring, then `Engine::builder`. In a Dreaming research child the built-in tools
+  are exactly the restricted research tools. `Runtime::attach` binds a conversation (an
+  interactive runtime binds every new conversation itself); `start_background_services`
+  starts Dreaming, the five-minute model refresh and MCP connections. `/changelog` reads
+  `reference/pi/packages/coding-agent/CHANGELOG.md` under the working directory, as archived.
+- **CLI:** the archived flag set and parsing rules: value options take the next argument
+  even when it starts with `-`, repeatable options accumulate, `--tools`/`--models` take
+  the last value, `@file` arguments, `-p` followed by a `---` prompt, invalid `--thinking`
+  and `--log-level` values are warnings, unknown short options are errors and unknown
+  `--flags` are resolved against extension flags (`Unknown option: --x`). Startup order,
+  `--version`, `--help` (stdout when interactive, else stderr), `--export` (`Exported to:`),
+  `--list-models [search]` (archived table and messages), `--fork` conflicts,
+  `--api-key requires a model ...`, `No session found matching '<id>'`, the missing session
+  cwd prompt (`QT_FORCE_MISSING_SESSION_CWD_PROMPT`) and error text, the initial message
+  (stdin, then `@file` blocks, then the first message; further messages run one by one),
+  print mode printing only the last answer, `error: <message>` and exit code 1 on failure,
+  JSON mode's session header line, Pi event lines and the wait for persistent workers with
+  `{"type":"subagent_event"}` frames and their follow-up runs, `qt-cli memory ...`, the
+  package subcommands and the Dreaming-verifier guard follow the archive.
+- **Differences:**
+  - The binary is `qt-cli`; the help text names it and points at the desktop app. Without a
+    prompt on a terminal, `qt-cli` exits with a hint instead of opening the TUI; with
+    messages it runs them as in print mode. `--resume` shows a numbered picker on the
+    terminal. `--version` prints the crate version (the archived binary printed `0.0.0`).
+  - `--mode rpc` reports that RPC mode is not available yet.
+  - `--api-key` is held in memory for the run and never written to `auth.json`.
+  - A value after a boolean extension flag (`--plan task`) is kept as a message (the
+    archived parser assigned it to the flag and failed).
+  - `--list-models` also lists models discovered live from ready providers (Ollama, OpenAI,
+    OpenRouter) unless `--offline`.
+  - `QT_SUBAGENT_ALLOW_EXTERNAL=0` in subagent children is not applied as a settings
+    override (the child's workspace policy comes from its settings).
 
 ## Desktop GUI (`qt-app`)
 

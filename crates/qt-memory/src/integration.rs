@@ -43,15 +43,26 @@ pub fn logical_input(messages: &[Message]) -> (u64, u64) {
     (users.len() as u64, epoch)
 }
 
-/// Applies the coordinator to one provider request; `None` leaves it unchanged.
+/// Applies the coordinator to one provider request; `None` leaves it unchanged
+/// (a failed augmentation also proceeds without memory: fail-open).
 pub fn augment_request(
     runtime: &MemoryRuntime,
     event: &ModelContextEvent,
     run: u64,
 ) -> Option<Request> {
+    try_augment_request(runtime, event, run).ok().flatten()
+}
+
+/// [`augment_request`] reporting failures, for `memory.prehandler.failOpen =
+/// false`: the request is aborted with `memory recall failed: <error>`.
+pub fn try_augment_request(
+    runtime: &MemoryRuntime,
+    event: &ModelContextEvent,
+    run: u64,
+) -> std::result::Result<Option<Request>, String> {
     let (sequence, epoch) = logical_input(&event.request.messages);
     if sequence == 0 {
-        return None;
+        return Ok(None);
     }
     let cancel = event.cancel.clone();
     let model = PrehandlerModel {
@@ -68,12 +79,14 @@ pub fn augment_request(
             &event.request.messages,
             Some(Arc::new(move || cancel.is_cancelled())),
         )
-        .ok()?;
+        .map_err(|error| format!("memory recall failed: {error}"))?;
     runtime.note_recall(run, &augmentation.contribution.memory_ids);
-    let message = augmentation.message?;
+    let Some(message) = augmentation.message else {
+        return Ok(None);
+    };
     let mut request = event.request.clone();
     insert_before_current_user(&mut request.messages, message);
-    Some(request)
+    Ok(Some(request))
 }
 
 #[derive(Default)]
@@ -288,11 +301,19 @@ pub fn attach_memory(
     if settings.enabled && settings.automatic_recall {
         let augment_runtime = Arc::clone(&runtime);
         let augment_bridge = Arc::clone(&bridge);
-        ids.push(
-            hooks.add_model_context_augmentor(Arc::new(move |event: &ModelContextEvent| {
-                augment_request(&augment_runtime, event, augment_bridge.current_run())
-            })),
-        );
+        if settings.fail_open {
+            ids.push(hooks.add_model_context_augmentor(Arc::new(
+                move |event: &ModelContextEvent| {
+                    augment_request(&augment_runtime, event, augment_bridge.current_run())
+                },
+            )));
+        } else {
+            ids.push(hooks.add_fallible_model_context_augmentor(Arc::new(
+                move |event: &ModelContextEvent| {
+                    try_augment_request(&augment_runtime, event, augment_bridge.current_run())
+                },
+            )));
+        }
     }
     let agent_bridge = Arc::clone(&bridge);
     ids.push(

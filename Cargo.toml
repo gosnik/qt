@@ -14,6 +14,9 @@ qt-llama = { path = "crates/qt-llama" }
 qt-mcp = { path = "crates/qt-mcp" }
 qt-extensions = { path = "crates/qt-extensions" }
 qt-subagents = { path = "crates/qt-subagents" }
+qt-index = { path = "crates/qt-index" }
+qt-memory = { path = "crates/qt-memory" }
+qt-runtime = { path = "crates/qt-runtime" }
 
 anyhow = "1"
 async-channel = "2"

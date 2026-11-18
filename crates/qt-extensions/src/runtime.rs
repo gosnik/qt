@@ -17,8 +17,9 @@ use qt_core::agent::AgentEvent;
 use qt_core::engine::Delivery;
 use qt_core::harness::hooks::{
     BeforeAgentStartEvent, BeforeAgentStartResult, BeforeCompactEvent, BeforeCompactResult,
-    ProviderRequestEvent, ProviderResponseEvent, ToolCallDecision, ToolCallEvent, ToolResultEvent,
-    ToolResultPatch,
+    BeforeForkResult, BeforeTreeResult, DiscoveredResourcePaths, InputEvent,
+    InputOutcome as CoreInputOutcome, InputSource as CoreInputSource, ProviderRequestEvent,
+    ProviderResponseEvent, ToolCallDecision, ToolCallEvent, ToolResultEvent, ToolResultPatch,
 };
 use qt_core::harness::{HookId, Hooks, SessionEvent, SessionStartReason};
 use qt_core::message::{AgentMessage, ContentBlock, CustomMessage, Message};
@@ -1320,10 +1321,8 @@ impl Extensions {
                     }
                     Message::User { .. } => {}
                 }
-                pending.insert(0, ("message_end", json!({ "message": mj })));
-            }
-            AgentEvent::CustomMessageEnd(m) => {
-                pending.push(("message_end", json!({ "message": m })));
+                // `message_end` handlers run as the qt-core replacement hook
+                // before the message is recorded.
             }
             AgentEvent::ToolStart(t) => {
                 turn.tool_names.insert(t.id.clone(), t.name.clone());
@@ -1371,14 +1370,22 @@ impl Extensions {
                     "previousSessionFile": previous_session_file.as_ref().map(|p| display_path(p)),
                 }),
             ),
-            SessionEvent::Shutdown { session_id, session_file } => self.observe(
-                "session_shutdown",
-                json!({
-                    "reason": "quit",
+            SessionEvent::Shutdown {
+                session_id,
+                session_file,
+                reason,
+                target_session_file,
+            } => {
+                let mut fields = json!({
+                    "reason": reason,
                     "sessionId": session_id,
                     "sessionFile": session_file.as_ref().map(|p| display_path(p)),
-                }),
-            ),
+                });
+                if let Some(target) = target_session_file {
+                    fields["targetSessionFile"] = json!(display_path(target));
+                }
+                self.observe("session_shutdown", fields)
+            }
             SessionEvent::Compact {
                 entry_id,
                 result,
@@ -1533,29 +1540,110 @@ impl Extensions {
         if !self.has_handlers("tool_call") {
             return None;
         }
-        let mut decision = None;
         let input = if event.args.is_object() {
             event.args.clone()
         } else {
             json!({})
         };
+        // (block decision, current input, input changed)
+        let mut state: (Option<ToolCallDecision>, Value, bool) = (None, input, false);
         self.route(
             "tool_call",
-            &mut decision,
-            |_| json!({ "toolCallId": event.tool_call_id, "toolName": event.tool_name, "input": input }),
-            |decision, r| {
+            &mut state,
+            |(_, input, _)| json!({ "toolCallId": event.tool_call_id, "toolName": event.tool_name, "input": input }),
+            |(decision, input, changed), r| {
                 let d = events::decode_tool_call_result(&r)?;
                 if d.block {
                     *decision = Some(ToolCallDecision {
                         block: true,
                         reason: d.reason,
+                        args: None,
                     });
                     return Ok(true);
+                }
+                if let Some(new_input) = d.input {
+                    *input = new_input;
+                    *changed = true;
                 }
                 Ok(false)
             },
         );
-        decision
+        let (decision, input, changed) = state;
+        decision.or_else(|| {
+            changed.then(|| ToolCallDecision {
+                block: false,
+                reason: None,
+                args: Some(input),
+            })
+        })
+    }
+
+    /// `message_end`: handlers may return `{message}` to replace the
+    /// finalized message (same role); later handlers see the replacement.
+    fn on_message_end(&self, message: &AgentMessage) -> Option<AgentMessage> {
+        if !self.has_handlers("message_end") {
+            return None;
+        }
+        let original = serde_json::to_value(message).ok()?;
+        let mut state = (original, false);
+        self.route(
+            "message_end",
+            &mut state,
+            |(current, _)| json!({ "message": current }),
+            |(current, changed), r| {
+                if let Some(replacement) = r.get("message").filter(|m| !m.is_null()) {
+                    if replacement.get("role") != current.get("role") {
+                        return Err(
+                            "extension message_end result message must keep the original role"
+                                .into(),
+                        );
+                    }
+                    *current = replacement.clone();
+                    *changed = true;
+                }
+                Ok(false)
+            },
+        );
+        let (value, changed) = state;
+        if !changed {
+            return None;
+        }
+        match serde_json::from_value::<AgentMessage>(value) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                self.report(&format!("extension message_end result is invalid: {e}"));
+                None
+            }
+        }
+    }
+
+    fn on_input(&self, event: &InputEvent) -> Result<Option<CoreInputOutcome>, String> {
+        if !self.has_handlers("input") {
+            return Ok(None);
+        }
+        let source = match event.source {
+            CoreInputSource::Interactive => InputSource::Interactive,
+            CoreInputSource::Rpc => InputSource::Rpc,
+            CoreInputSource::Extension => InputSource::Extension,
+        };
+        let images = if event.images.is_empty() {
+            Value::Null
+        } else {
+            serde_json::to_value(&event.images).unwrap_or(Value::Null)
+        };
+        Ok(Some(
+            match self.emit_input(&event.text, images, source)? {
+                InputOutcome::Handled => CoreInputOutcome::Handled,
+                InputOutcome::Continue { text, images } => CoreInputOutcome::Continue {
+                    text,
+                    images: if images.is_null() {
+                        Vec::new()
+                    } else {
+                        parse_content(&images)?
+                    },
+                },
+            },
+        ))
     }
 
     fn on_tool_result(&self, event: &ToolResultEvent) -> Option<ToolResultPatch> {
@@ -1666,10 +1754,112 @@ impl Extensions {
                 x.on_session_event(e);
             }
         })));
-        let g = get;
+        let g = get.clone();
         ids.push(hooks.add_agent_event_listener(Arc::new(move |e| {
             if let Some(x) = g() {
                 x.on_agent_event(e);
+            }
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_message_end(Arc::new(move |m| g()?.on_message_end(m))));
+        let g = get.clone();
+        ids.push(hooks.add_input(Arc::new(move |e| match g() {
+            Some(x) => x.on_input(e),
+            None => Ok(None),
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_session_before_switch(Arc::new(move |e| {
+            g().is_some_and(|x| {
+                x.emit_session_before_switch(
+                    &e.reason,
+                    e.target_session_file
+                        .as_ref()
+                        .map(|p| display_path(p))
+                        .as_deref(),
+                )
+            })
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_session_before_fork(Arc::new(move |e| {
+            let x = g()?;
+            if !x.has_handlers("session_before_fork") {
+                return None;
+            }
+            let (cancel, skip) = x.emit_session_before_fork(&e.entry_id, &e.position);
+            Some(BeforeForkResult {
+                cancel,
+                skip_conversation_restore: skip,
+            })
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_session_before_tree(Arc::new(move |e| {
+            let x = g()?;
+            if !x.has_handlers("session_before_tree") {
+                return None;
+            }
+            let out = x.emit_session_before_tree(json!({
+                "targetId": e.target_id,
+                "oldLeafId": e.old_leaf_id,
+                "userWantsSummary": e.user_wants_summary,
+                "customInstructions": e.custom_instructions,
+                "replaceInstructions": e.replace_instructions,
+                "label": e.label,
+                "entriesToSummarize": e.entries_to_summarize.iter().map(|x| x.to_value()).collect::<Vec<_>>(),
+            }));
+            Some(BeforeTreeResult {
+                cancel: out.cancel,
+                summary: out.summary,
+                custom_instructions: out.custom_instructions,
+                replace_instructions: out.replace_instructions,
+                label: out.label,
+            })
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_model_select(Arc::new(move |e| {
+            if let Some(x) = g().filter(|x| x.has_handlers("model_select")) {
+                let model =
+                    |m: &qt_core::provider::ModelRef| json!({"provider": m.provider, "id": m.id});
+                x.emit_model_select(
+                    model(&e.model),
+                    e.previous.as_ref().map(model).unwrap_or(Value::Null),
+                    &e.source,
+                );
+            }
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_thinking_level_select(Arc::new(move |e| {
+            if let Some(x) = g().filter(|x| x.has_handlers("thinking_level_select")) {
+                x.emit_thinking_level_select(&e.level, &e.previous);
+            }
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_user_bash(Arc::new(move |e| {
+            if let Some(x) = g().filter(|x| x.has_handlers("user_bash")) {
+                x.emit_user_bash(&e.command, e.exclude_from_context, &e.cwd);
+            }
+        })));
+        let g = get.clone();
+        ids.push(hooks.add_resources_discover(Arc::new(move |e| {
+            let x = g()?;
+            if !x.has_handlers("resources_discover") {
+                return None;
+            }
+            let found = x.emit_resources_discover(&e.cwd, &e.reason);
+            Some(DiscoveredResourcePaths {
+                skill_paths: found.skill_paths,
+                prompt_paths: found.prompt_paths,
+                theme_paths: found.theme_paths,
+            })
+        })));
+        let g = get;
+        ids.push(hooks.add_instructions_loaded(Arc::new(move |e| {
+            if let Some(x) = g().filter(|x| x.has_handlers("instructions_loaded")) {
+                x.emit_instructions_loaded(json!(
+                    e.files
+                        .iter()
+                        .map(|f| json!({"path": display_path(f), "reason": e.reason}))
+                        .collect::<Vec<_>>()
+                ));
             }
         })));
         *self.inner.installed.lock().expect("installed lock") = Some((hooks.clone(), ids));

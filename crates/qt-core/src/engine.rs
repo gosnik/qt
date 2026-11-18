@@ -33,8 +33,10 @@ use crate::harness::goals::{
     UpdateGoalTool,
 };
 use crate::harness::hooks::{
-    BeforeAgentStartEvent, BeforeCompactEvent, CompactionReason, Hooks, ProviderResponseEvent,
-    SessionEvent, SessionStartReason,
+    BeforeAgentStartEvent, BeforeCompactEvent, CompactionReason, Hooks, InputOutcome, InputSource,
+    InstructionsLoadedEvent, ModelSelectEvent, ProviderResponseEvent, ResourcesDiscoverEvent,
+    SessionBeforeForkEvent, SessionBeforeSwitchEvent, SessionBeforeTreeEvent, SessionEvent,
+    SessionStartReason, ThinkingLevelSelectEvent, UserBashEvent,
 };
 use crate::harness::overflow::{is_context_overflow, is_retryable_error};
 use crate::harness::queue::{MessageQueues, QueueSnapshot};
@@ -122,6 +124,8 @@ struct EngineInner {
     extensions: RwLock<Vec<ExtensionInfo>>,
     memory_context: RwLock<Option<MemoryContextFn>>,
     last_request: Arc<RwLock<Option<Value>>>,
+    /// `resources_discover` has run once (later loads use reason `reload`).
+    resources_loaded: std::sync::atomic::AtomicBool,
 }
 
 /// Models per provider id, or that provider's discovery error.
@@ -359,6 +363,7 @@ impl EngineBuilder {
                 extensions: RwLock::new(Vec::new()),
                 memory_context: RwLock::new(None),
                 last_request: last_request.clone(),
+                resources_loaded: std::sync::atomic::AtomicBool::new(false),
                 home: self.home,
                 cwd,
             }),
@@ -508,6 +513,23 @@ impl Engine {
             .expect("settings lock")
             .global
             .clone()
+    }
+
+    /// The raw project settings layer (`<workspace>/.pi/settings.*`), empty
+    /// without a project file.
+    pub fn project_settings_layer(&self) -> serde_json::Map<String, Value> {
+        self.inner
+            .settings
+            .read()
+            .expect("settings lock")
+            .project
+            .clone()
+    }
+
+    /// A handle to the engine runtime (for services that spawn their own
+    /// tasks, such as persistent subagent workers).
+    pub fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.inner.runtime.handle().clone()
     }
 
     /// The project settings file in use, if any.
@@ -677,12 +699,62 @@ impl Engine {
     /// (`/reload`). Returns the resource diagnostics.
     pub fn reload_resources(&self) -> Vec<String> {
         self.reload_settings();
+        let reload = self
+            .inner
+            .resources_loaded
+            .swap(true, std::sync::atomic::Ordering::SeqCst);
+        let reason = if reload { "reload" } else { "startup" };
         let mut options = self.inner.resource_options.clone();
         options.workspace_root = Some(self.workspace_policy().root().to_path_buf());
+        let extra = self
+            .inner
+            .hooks
+            .run_resources_discover(&ResourcesDiscoverEvent {
+                cwd: self.inner.cwd.clone(),
+                reason: reason.into(),
+            });
+        options.skill_paths.extend(extra.skill_paths);
+        options.prompt_template_paths.extend(extra.prompt_paths);
+        options.theme_paths.extend(extra.theme_paths);
         let snapshot = load_resources(&self.inner.home, &options);
         let lines = snapshot.diagnostic_lines();
         *self.inner.resources.write().expect("resources lock") = Arc::new(snapshot);
+        let files: Vec<PathBuf> = self.context_files().into_iter().map(|f| f.path).collect();
+        if !files.is_empty() {
+            self.inner
+                .hooks
+                .emit_instructions_loaded(&InstructionsLoadedEvent {
+                    files,
+                    reason: if reload { "reload" } else { "session_start" }.into(),
+                });
+        }
         lines
+    }
+
+    /// Run the `input` hooks for text a user (or RPC client, or extension)
+    /// is about to submit. Front ends call this before [`Conversation::prompt`].
+    pub fn process_input(
+        &self,
+        text: &str,
+        images: Vec<ContentBlock>,
+        source: InputSource,
+    ) -> Result<InputOutcome> {
+        self.inner
+            .hooks
+            .run_input(text, images, source)
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Ask `session_before_switch` hooks whether the active session may be
+    /// replaced (`reason`: `new` or `resume`); `false` when one cancelled.
+    pub fn allow_session_switch(&self, reason: &str, target: Option<&Path>) -> bool {
+        !self
+            .inner
+            .hooks
+            .run_session_before_switch(&SessionBeforeSwitchEvent {
+                reason: reason.into(),
+                target_session_file: target.map(Path::to_path_buf),
+            })
     }
 
     /// Instruction files folded into the system prompt (none with
@@ -784,6 +856,16 @@ impl Engine {
             auth.set_api_key(provider, key);
         }
         auth.save(&self.inner.home)
+    }
+
+    /// Use `key` for `provider` in this process only (`--api-key`); it is
+    /// never written to `auth.json` and is lost on [`Self::reload_auth`].
+    pub fn set_runtime_api_key(&self, provider: &str, key: &str) {
+        self.inner
+            .auth
+            .write()
+            .expect("auth lock")
+            .set_transient_api_key(provider, key);
     }
 
     /// Re-read `auth.json`, for example after `qt_core::auth::login_and_store`
@@ -1264,8 +1346,20 @@ impl std::fmt::Debug for Conversation {
     }
 }
 
-fn thinking_from_str(s: &str) -> ThinkingLevel {
+/// The thinking level recorded in a session (`off` when unknown). Accepts
+/// every Pi level, including `minimal` and `xhigh`.
+pub(crate) fn thinking_from_str(s: &str) -> ThinkingLevel {
     ThinkingLevel::parse(s).unwrap_or_default()
+}
+
+fn usage_of(messages: &[AgentMessage]) -> Usage {
+    let mut usage = Usage::default();
+    for m in messages {
+        if let Some(a) = m.as_assistant() {
+            usage.add(&a.usage);
+        }
+    }
+    usage
 }
 
 fn user_message(text: &str, images: Vec<ContentBlock>) -> AgentMessage {
@@ -1314,12 +1408,7 @@ impl Conversation {
         previous: Option<PathBuf>,
     ) -> Self {
         let ctx = session.build_context();
-        let mut usage = Usage::default();
-        for m in &ctx.messages {
-            if let Some(a) = m.as_assistant() {
-                usage.add(&a.usage);
-            }
-        }
+        let usage = usage_of(&ctx.messages);
         let names: Vec<&str> = engine.tools().iter().map(|t| t.name()).collect();
         let active_tools = session
             .latest_custom_on_branch(TOOLS_CONFIG_ENTRY_TYPE)
@@ -1369,6 +1458,10 @@ impl Conversation {
             engine,
         };
         conversation.engine.hooks().emit_session(&start);
+        conversation
+            .engine
+            .hooks()
+            .emit_conversation_created(&conversation);
         conversation
     }
 
@@ -1490,40 +1583,64 @@ impl Conversation {
 
     /// Switch models. While running, the change applies at the next turn.
     pub fn set_model(&self, model: ModelRef) {
+        self.select_model(model, "set");
+    }
+
+    /// Switch models, reporting `source` (`set`, `cycle`, `restore`) to
+    /// `model_select` hooks.
+    pub fn select_model(&self, model: ModelRef, source: &str) {
         let window = self.engine.context_window(&model);
-        let mut state = self.lock();
-        if state.model.as_ref() == Some(&model) {
-            if window.is_some() {
-                state.context_window = window;
+        let previous = {
+            let mut state = self.lock();
+            if state.model.as_ref() == Some(&model) {
+                if window.is_some() {
+                    state.context_window = window;
+                }
+                return;
             }
-            return;
-        }
-        state.context_window = window;
-        state.model = Some(model.clone());
-        state.pending.params_dirty = true;
-        let _ = Self::record_entry(
-            &mut state,
-            EntryKind::ModelChange {
-                provider: model.provider,
-                model_id: model.id,
-            },
-        );
+            state.context_window = window;
+            let previous = state.model.replace(model.clone());
+            state.pending.params_dirty = true;
+            let _ = Self::record_entry(
+                &mut state,
+                EntryKind::ModelChange {
+                    provider: model.provider.clone(),
+                    model_id: model.id.clone(),
+                },
+            );
+            previous
+        };
+        self.engine.hooks().emit_model_select(&ModelSelectEvent {
+            model,
+            previous,
+            source: source.into(),
+        });
     }
 
     /// Change the thinking level. While running, it applies at the next turn.
     pub fn set_thinking(&self, level: ThinkingLevel) {
-        let mut state = self.lock();
-        if state.thinking == level {
-            return;
-        }
-        state.thinking = level;
-        state.pending.params_dirty = true;
-        let _ = Self::record_entry(
-            &mut state,
-            EntryKind::ThinkingLevelChange {
-                thinking_level: level.as_str().into(),
-            },
-        );
+        let previous = {
+            let mut state = self.lock();
+            if state.thinking == level {
+                return;
+            }
+            let previous = state.thinking;
+            state.thinking = level;
+            state.pending.params_dirty = true;
+            let _ = Self::record_entry(
+                &mut state,
+                EntryKind::ThinkingLevelChange {
+                    thinking_level: level.as_str().into(),
+                },
+            );
+            previous
+        };
+        self.engine
+            .hooks()
+            .emit_thinking_level_select(&ThinkingLevelSelectEvent {
+                level: level.as_str().into(),
+                previous: previous.as_str().into(),
+            });
     }
 
     /// Names of the tools offered to the model.
@@ -2554,8 +2671,41 @@ impl Conversation {
             state.running = Some(cancel.clone());
             (old_leaf, target, entries)
         };
+        let mut options = options;
+        let decision = self
+            .engine
+            .hooks()
+            .run_session_before_tree(&SessionBeforeTreeEvent {
+                target_id: target_id.clone(),
+                old_leaf_id: old_leaf.clone(),
+                user_wants_summary: options.summarize,
+                custom_instructions: options.custom_instructions.clone(),
+                replace_instructions: options.replace_instructions,
+                label: options.label.clone(),
+                entries_to_summarize: entries.clone(),
+            });
+        if decision.cancel {
+            self.lock().running = None;
+            return Ok(TreeNavigation {
+                cancelled: true,
+                ..Default::default()
+            });
+        }
+        if decision.custom_instructions.is_some() {
+            options.custom_instructions = decision.custom_instructions;
+        }
+        if let Some(replace) = decision.replace_instructions {
+            options.replace_instructions = replace;
+        }
+        if decision.label.is_some() {
+            options.label = decision.label;
+        }
+        let hook_summary = decision.summary.and_then(|v| {
+            let summary = v.get("summary")?.as_str()?.to_string();
+            Some((summary, v.get("details").cloned()))
+        });
         let result = self
-            .navigate_tree_finish(old_leaf, target, entries, options, &cancel)
+            .navigate_tree_finish(old_leaf, target, entries, options, hook_summary, &cancel)
             .await;
         {
             let mut state = self.lock();
@@ -2572,10 +2722,13 @@ impl Conversation {
         target: SessionEntry,
         entries: Vec<SessionEntry>,
         options: NavigateOptions,
+        hook_summary: Option<(String, Option<Value>)>,
         cancel: &CancellationToken,
     ) -> Result<TreeNavigation> {
-        let mut summary = None;
-        if options.summarize && !entries.is_empty() {
+        let mut summary: Option<(String, Option<Value>)> = None;
+        if let Some(provided) = hook_summary.filter(|_| options.summarize) {
+            summary = Some(provided);
+        } else if options.summarize && !entries.is_empty() {
             let summarizer = self.summarizer()?;
             let reserve = self.engine.harness_settings().branch_summary_reserve_tokens;
             match compaction::generate_branch_summary(
@@ -2588,7 +2741,7 @@ impl Conversation {
             )
             .await
             {
-                Ok(s) => summary = Some(s),
+                Ok(s) => summary = Some((s.summary.clone(), Some(s.details()))),
                 Err(SummaryError::Aborted) => {
                     return Ok(TreeNavigation {
                         cancelled: true,
@@ -2605,13 +2758,11 @@ impl Conversation {
         };
         let mut state = self.lock();
         let mut summary_entry_id = None;
-        if let Some(s) = summary {
-            let id = state.session.branch_with_summary(
-                new_leaf.as_deref(),
-                &s.summary,
-                Some(s.details()),
-                None,
-            )?;
+        if let Some((text, details)) = summary {
+            let id =
+                state
+                    .session
+                    .branch_with_summary(new_leaf.as_deref(), &text, details, None)?;
             if let Some(label) = options.label.as_deref().filter(|l| !l.trim().is_empty()) {
                 state.session.append_label_change(&id, Some(label))?;
             }
@@ -2627,6 +2778,7 @@ impl Conversation {
         }
         let ctx = state.session.build_context();
         state.messages = ctx.messages;
+        state.usage = usage_of(&state.messages);
         let event = SessionEvent::Tree {
             session_id: state.session.id().to_string(),
             old_leaf_id: old_leaf,
@@ -2647,6 +2799,16 @@ impl Conversation {
     /// its parent and its text is returned for editing. With `at == true`
     /// the new session ends at `entry_id`.
     pub fn fork(&self, entry_id: &str, at: bool) -> Result<Fork> {
+        let decision = self
+            .engine
+            .hooks()
+            .run_session_before_fork(&SessionBeforeForkEvent {
+                entry_id: entry_id.into(),
+                position: if at { "at" } else { "before" }.into(),
+            });
+        if decision.cancel {
+            bail!("Fork cancelled by an extension");
+        }
         let state = self.lock();
         if state.running.is_some() {
             bail!("The agent is already running");
@@ -2695,7 +2857,7 @@ impl Conversation {
         conversation.lock().thinking = self.thinking();
         Ok(Fork {
             conversation,
-            selected_text,
+            selected_text: selected_text.filter(|_| !decision.skip_conversation_restore),
         })
     }
 
@@ -2721,6 +2883,12 @@ impl Conversation {
 
     /// Notify listeners that this conversation is being closed and stop it.
     pub fn shutdown(&self) {
+        self.shutdown_with("quit", None);
+    }
+
+    /// [`Self::shutdown`] with Pi's reason (`quit`, `reload`, `new`,
+    /// `resume`, `fork`) and the session being switched to.
+    pub fn shutdown_with(&self, reason: &str, target_session_file: Option<&Path>) {
         self.abort();
         let (session_id, session_file) = {
             let s = self.lock();
@@ -2734,6 +2902,8 @@ impl Conversation {
         self.engine.hooks().emit_session(&SessionEvent::Shutdown {
             session_id,
             session_file,
+            reason: reason.into(),
+            target_session_file: target_session_file.map(Path::to_path_buf),
         });
     }
 
@@ -3081,6 +3251,11 @@ impl Conversation {
             }
             state.bash_running = Some(cancel.clone());
         }
+        self.engine.hooks().emit_user_bash(&UserBashEvent {
+            command: command.clone(),
+            exclude_from_context,
+            cwd: self.engine.cwd().to_path_buf(),
+        });
         let (tx, rx) = async_channel::unbounded();
         let mut env = self.engine.tool_environment(None);
         env.policy =
@@ -3173,6 +3348,96 @@ mod tests {
         assert!(conv.prompt("  ", vec![]).is_err());
         assert!(!conv.is_running());
         assert!(conv.compact(None).is_err());
+    }
+
+    #[test]
+    fn thinking_levels_round_trip_through_sessions() {
+        for level in ThinkingLevel::ALL {
+            assert_eq!(thinking_from_str(level.as_str()), level);
+        }
+        assert_eq!(thinking_from_str("minimal"), ThinkingLevel::Minimal);
+        assert_eq!(thinking_from_str("XHigh"), ThinkingLevel::XHigh);
+        assert_eq!(thinking_from_str("bogus"), ThinkingLevel::Off);
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(AgentHome::new(dir.path().join("home")), dir.path()).unwrap();
+        let conv = engine.new_conversation(None);
+        conv.set_thinking(ThinkingLevel::XHigh);
+        let path = conv.session_path();
+        conv.push_message_for_test(AgentMessage::Llm(Message::user_text("hi")));
+        conv.push_message_for_test(AgentMessage::Llm(Message::Assistant(AssistantMessage {
+            stop_reason: StopReason::Stop,
+            ..Default::default()
+        })));
+        let reopened = engine.open_conversation(&path).unwrap();
+        assert_eq!(reopened.thinking(), ThinkingLevel::XHigh);
+    }
+
+    #[test]
+    fn usage_follows_tree_navigation_and_lifecycle_hooks_fire() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(AgentHome::new(dir.path().join("home")), dir.path()).unwrap();
+        let selected = Arc::new(Mutex::new(Vec::new()));
+        let log = selected.clone();
+        engine
+            .hooks()
+            .add_model_select(Arc::new(move |e: &ModelSelectEvent| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("{}:{}", e.model, e.source));
+            }));
+        let log = selected.clone();
+        engine
+            .hooks()
+            .add_thinking_level_select(Arc::new(move |e: &ThinkingLevelSelectEvent| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("{}<-{}", e.level, e.previous));
+            }));
+        let conv = engine.new_conversation(None);
+        conv.set_model(ModelRef::new("p", "m"));
+        conv.set_thinking(ThinkingLevel::Minimal);
+        assert_eq!(*selected.lock().unwrap(), ["p/m:set", "minimal<-off"]);
+
+        let assistant = |tokens: u64| {
+            AgentMessage::Llm(Message::Assistant(AssistantMessage {
+                usage: Usage {
+                    input_tokens: tokens,
+                    output_tokens: 1,
+                    ..Default::default()
+                },
+                stop_reason: StopReason::Stop,
+                ..Default::default()
+            }))
+        };
+        conv.push_message_for_test(AgentMessage::Llm(Message::user_text("one")));
+        conv.push_message_for_test(assistant(10));
+        let first_leaf = conv.leaf_id().unwrap();
+        conv.push_message_for_test(AgentMessage::Llm(Message::user_text("two")));
+        conv.push_message_for_test(assistant(100));
+        // `push_message_for_test` bypasses run accounting; navigation rebuilds it.
+        let nav = engine
+            .block_on(conv.navigate_tree(&first_leaf, NavigateOptions::default()))
+            .unwrap()
+            .unwrap();
+        assert!(!nav.cancelled);
+        assert_eq!(conv.usage().input_tokens, 10);
+
+        engine
+            .hooks()
+            .add_session_before_tree(Arc::new(|_e: &SessionBeforeTreeEvent| {
+                Some(crate::harness::hooks::BeforeTreeResult {
+                    cancel: true,
+                    ..Default::default()
+                })
+            }));
+        let root = conv.entries()[0].id.clone();
+        let nav = engine
+            .block_on(conv.navigate_tree(&root, NavigateOptions::default()))
+            .unwrap()
+            .unwrap();
+        assert!(nav.cancelled);
+        assert!(!conv.is_running());
+        assert_eq!(conv.leaf_id().as_deref(), Some(first_leaf.as_str()));
     }
 
     #[test]

@@ -41,7 +41,12 @@ cargo run --release -p qt-app -- ~/code/myproject
 cargo run --release -p qt-cli -- "summarise this repository"
 ```
 
-The binaries are `target/release/qt` and `target/release/qt-cli`.
+The binaries are `target/release/qt` and `target/release/qt-cli`. Both are built by the
+`qt-runtime` composition root, so they share the llama.cpp provider, project index, MCP
+servers, governed memory, extensions and subagents. Subagent workers, the memory
+pre-handler and Dreaming run `qt-cli` children, so keep `qt-cli` next to `qt` (or set
+`QT_SUBAGENT_EXECUTABLE`). In-process llama.cpp is built when its source is present
+(`git submodule update --init third_party/llama.cpp` or `QT_LLAMA_CPP_DIR`).
 
 ## First run
 
@@ -60,6 +65,35 @@ The binaries are `target/release/qt` and `target/release/qt-cli`.
 qt can modify files and execute commands in the project directory. Use version control and
 review its changes.
 
+### Command line
+
+`qt-cli` runs prompts without the window and exits (`qt-cli --help` lists everything). The
+desktop app is the interactive interface; `qt` itself only takes a project directory.
+
+```sh
+qt-cli -p "summarise this repository"            # print the final answer
+git diff | qt-cli -p "review this diff"           # stdin becomes the prompt
+qt-cli @notes.md @screenshot.png "what is wrong?" # attach files and images
+qt-cli --mode json "fix the failing test"         # Pi JSON event lines (session header first)
+qt-cli -c "and now the docs"                      # continue the latest session
+qt-cli --model anthropic/claude-sonnet-4-5:high "plan the refactor"
+qt-cli --tools read,grep,find,ls -p "review src/"  # read-only run
+qt-cli --list-models sonnet                       # model table, optional fuzzy search
+qt-cli --export session.jsonl out.html            # session to HTML
+qt-cli install npm:@scope/pkg | remove | update | list | config
+qt-cli memory status                              # governed memory commands
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-p`, `--print`; `--mode text\|json` | Print the final answer, or stream Pi JSON events (exit code 1 when a run fails). JSON mode waits for persistent subagent workers and prints `subagent_event` frames |
+| `--provider`, `--model <id\|provider/id[:thinking]>`, `--thinking`, `--api-key`, `--models` | Model selection (`--api-key` is used for this run only), thinking level and model scope |
+| `-c`/`--continue`, `-r`/`--resume`, `--session <path\|id>`, `--fork <path\|id>`, `--no-session`, `--session-dir` | Session selection and storage |
+| `-t`/`--tools a,b`, `-nt`/`--no-tools`, `-nbt`/`--no-builtin-tools`, `--no-memory` | Tool allowlist (built-in, index, memory, subagent, MCP and extension tools) and memory |
+| `--system-prompt`, `--append-system-prompt`, `--skill`, `-ns`, `--prompt-template`, `-np`, `--theme`, `--no-themes`, `-nc`/`--no-context-files` | Prompt resources |
+| `-e`/`--extension <file>`, `-ne`/`--no-extensions`, `--<flag>` | Extensions and the flags they register |
+| `--discover-local-models <dir>`, `--offline`, `--log-file`, `--log-stderr`, `--log-level`, `-v`, `-h` | Local GGUF discovery, no network, logging (`QT_LOG_FILE`, `QT_LOG_STDERR`, `QT_LOG_LEVEL`) |
+
 ## Configuration
 
 The agent home is `~/.qt`. Set `QT_CODING_AGENT_DIR` to use a different directory.
@@ -72,6 +106,15 @@ The agent home is `~/.qt`. Set `QT_CODING_AGENT_DIR` to use a different director
 | `ollama.instances[]` | `{ "id", "baseUrl", "enabled", "models" }` Ollama servers |
 | `providers.<id>.baseUrl` | Override the endpoint for `anthropic`, `openai` or `openrouter` |
 | `gui.theme` | `"light"` or `"dark"`; unset follows the system |
+| `theme` | Pi theme name (built-in `dark`/`light` or a theme file) |
+| `workspaceRoot`, `allowExternalFilesystemAccess` | Workspace confinement of path tools (a project file may only narrow it) |
+| `sessionDir` | Session directory (`--session-dir` and `PI_CODING_AGENT_SESSION_DIR` win) |
+| `enabledModels` | Model scope for the picker (`--models` for one run) |
+| `compaction.*`, `retry.*`, `steeringMode`, `followUpMode` | Auto-compaction, auto-retry and queue modes |
+| `llama.*` | In-process llama.cpp: backend, context, generation, KV cache, grammar, embeddings, `models[]` |
+| `mcpServers` | MCP servers (also read from `mcp.json` files) |
+| `memory.*` | Governed memory (`memory.enabled`, recall, capture, pre-handler, Dreaming, retrieval) |
+| `packages` | Extension packages managed by `qt-cli install/remove/update/config` |
 
 Other keys, for example those written by the archived C++ qt, are kept unchanged when
 qt rewrites the file.

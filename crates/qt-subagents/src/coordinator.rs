@@ -137,6 +137,16 @@ impl CoordinatorOptions {
     ///
     /// Panics when called outside a Tokio runtime.
     pub fn new(agent_home: &Path, parent_session_id: impl Into<String>) -> Self {
+        Self::new_in(agent_home, parent_session_id, Handle::current())
+    }
+
+    /// [`Self::new`] with an explicit runtime (callers outside a Tokio
+    /// context, such as a composition root holding the engine's handle).
+    pub fn new_in(
+        agent_home: &Path,
+        parent_session_id: impl Into<String>,
+        runtime: Handle,
+    ) -> Self {
         let parent_session_id = parent_session_id.into();
         Self {
             directory: coordinator_directory(agent_home, &parent_session_id),
@@ -146,7 +156,7 @@ impl CoordinatorOptions {
                 .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| ROOT_PATH.to_string()),
             concurrency: DEFAULT_CONCURRENCY,
-            runtime: Handle::current(),
+            runtime,
         }
     }
 }

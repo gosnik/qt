@@ -8,6 +8,8 @@ build = "build.rs"
 [dependencies]
 qt-core.workspace = true
 qt-llama-sys.workspace = true
+anyhow.workspace = true
+futures.workspace = true
 dirs.workspace = true
 regex.workspace = true
 serde.workspace = true

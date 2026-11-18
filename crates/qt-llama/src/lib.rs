@@ -23,6 +23,7 @@
 //! built without the llama.cpp sources, everything except model execution
 //! still works and model operations fail with [`LlamaError::Unavailable`].
 
+pub mod backend;
 pub mod discovery;
 pub mod gguf;
 #[cfg(llama_native)]
@@ -34,6 +35,7 @@ pub mod runtime;
 pub mod sampling;
 pub mod settings;
 
+pub use backend::LlamaProviderBackend;
 pub use discovery::{
     DiscoveredModel, DiscoveryOptions, DiscoveryResult, MemoryTask, ModelCapability,
     discover_models,
