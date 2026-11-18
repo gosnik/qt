@@ -40,3 +40,28 @@ archived C++ qt (`archived/`).
 - **Not yet implemented** (see `PLAN.md`): compaction, slash commands, skills, OAuth
   logins, in-process llama.cpp, memory, extensions, MCP, subagents, the project index and
   RPC mode.
+
+## In-process llama.cpp (`qt-llama`)
+
+The `qt-llama` crate ports the archived qt llama integration as a library; it is not yet
+wired into the engine, model picker or a `/llama` panel.
+
+- **Compatible:** `settings.llama` keys, defaults, error and validation messages; path
+  resolution from the settings file directory with `~`; GGUF discovery roots, ids,
+  quantisation names (including `Q2_0` = 41), classification, usage notes and memory-task
+  model selection; persisting discovered models to `settings.json`; offload planning (1 GiB
+  headroom per device, then 75/50/25 %/CPU retries); sampler chain order and defaults
+  (temperature 0.3, top-p 0.9, 256 output tokens); grammar resolution; the prompt protocol
+  (OpenAI-style request JSON with sorted keys, controller messages, `tool_choice` forcing on
+  file/search/model words, first-JSON-object tool-call parsing); embedding queue timeout and
+  cancellation; KV cache operations and runtime status fields.
+- **Differences:** the `session` KV policy reuses the longest cached token prefix of the new
+  prompt (the archived qt appended every full prompt after the previous one, duplicating
+  context, and pruned at a 70 % watermark); generation is cancellable between tokens and
+  during decode; streamed text is split only at UTF-8 boundaries; tool results are sent as
+  the result text (with `is_error` when set) because Rust tool results have no structured
+  payload; tool calls are only parsed when tools were offered; the request `maxTokens`
+  caps the configured output limit; `tensorSplit` is padded to `llama_max_devices()`;
+  embedding contexts size the batch to the context so encoder models accept full inputs.
+  `kvCache.maxSessions` and `kvCache.clearOnModelChange` are parsed and validated but, as in
+  the archived qt, have no runtime effect.

@@ -27,6 +27,34 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `libc` (unix) | Killing a bash process group on timeout or abort |
 | `tempfile` (dev) | Test fixtures |
 
+## In-process llama.cpp (`qt-llama-sys`, `qt-llama`)
+
+| Crate | Why |
+| --- | --- |
+| `bindgen` 0.72 (build only) | Generates `qt-llama-sys` FFI bindings for `llama.h`, `ggml-backend.h` and the C shim over `llama-ext.h`, so struct layouts always match the pinned fork |
+
+`qt-llama` otherwise reuses workspace crates (`serde_json`, `regex`, `thiserror`, `tokio`,
+`tokio-util`, `dirs`). The C++ library is the PrismML llama.cpp fork, a git submodule at
+`third_party/llama.cpp` pinned to `9fcaed763ccda38ea81068ad9d7f991aaddca451` (it adds the
+group-128 `Q2_0` ternary format with CPU, Metal, CUDA and Vulkan kernels).
+`crates/qt-llama-sys/build.rs` builds it with CMake as static libraries, replacing the
+archived `scripts/build_llama_cpp.py`:
+
+- Source: `QT_LLAMA_CPP_DIR` (default `third_party/llama.cpp`). Without the source the crates
+  still build, without llama.cpp, and model calls report why (`QT_LLAMA_REQUIRE=1` makes a
+  missing source fatal instead).
+- GPU backends: `QT_LLAMA_GPU_BACKENDS=auto` (default) enables CUDA, HIP, Vulkan or Metal when
+  the SDK and a device are present; `cpu`/`off`/`none` force CPU only; `all` or a list such as
+  `cuda,vulkan` request backends explicitly. An auto-detected GPU build that fails is retried
+  CPU-only. `cargo build -vv -p qt-llama-sys` prints the selection, and runtime status reports
+  `compiledBackends`. `QT_LLAMA_BUILD_PROFILE=full` is the release profile (CUDA+Vulkan+HIP, CUDA
+  architectures `75;80;86;89;90`, NCCL/RCCL off).
+- `QT_LLAMA_CMAKE_ARGS` passes extra CMake arguments, `QT_LLAMA_CMAKE_GENERATOR` picks the
+  generator (Ninja when installed) and `QT_LLAMA_BUILD_JOBS` the parallelism.
+- Build tools: `cmake`, a C/C++17 compiler and libclang (for bindgen). Vulkan needs the
+  loader and headers, `glslc` and SPIR-V headers (`libvulkan-dev glslc spirv-headers` on
+  Debian/Ubuntu); CUDA/HIP need their toolkits. `QT_LLAMA_LOG=1` keeps llama.cpp's log output.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including
