@@ -34,6 +34,8 @@ use crate::message::{
 use crate::provider::ModelRef;
 
 pub const SESSION_VERSION: u64 = 3;
+/// Header field holding the session's prompt history (archived qt).
+pub const PROMPT_HISTORY_KEY: &str = "promptHistory";
 /// Environment variable naming the session directory (below `--session-dir`).
 pub const SESSION_DIR_ENV: &str = "PI_CODING_AGENT_SESSION_DIR";
 
@@ -608,7 +610,17 @@ impl Session {
         let mut entries = Vec::new();
         for value in values.into_iter().skip(1) {
             if value.get("type").and_then(Value::as_str) == Some("session") {
-                diagnostics.push("extra session header ignored".into());
+                // The archived qt appended its session metadata (with the
+                // per-session prompt history) as further header lines; the
+                // latest prompt history wins.
+                match value.get("promptHistory").filter(|h| h.is_array()) {
+                    Some(history) => {
+                        header
+                            .extra
+                            .insert(PROMPT_HISTORY_KEY.into(), history.clone());
+                    }
+                    None => diagnostics.push("extra session header ignored".into()),
+                }
                 continue;
             }
             let raw = value.clone();
@@ -706,6 +718,34 @@ impl Session {
     }
     pub fn header(&self) -> &SessionHeader {
         &self.header
+    }
+    /// The header's `promptHistory` (prompts submitted in this session,
+    /// newest first; archived qt), `None` when the header has none.
+    pub fn prompt_history(&self) -> Option<Vec<String>> {
+        let history = self.header.extra.get(PROMPT_HISTORY_KEY)?.as_array()?;
+        Some(
+            history
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+
+    /// Replace the header's `promptHistory` and rewrite the file when it has
+    /// been written (a session without an assistant message stays in memory,
+    /// like every other entry). Pi ignores unknown header fields.
+    pub fn set_prompt_history(&mut self, history: &[String]) -> Result<()> {
+        if self.prompt_history().as_deref() == Some(history) {
+            return Ok(());
+        }
+        self.header
+            .extra
+            .insert(PROMPT_HISTORY_KEY.into(), json!(history));
+        if self.persist && self.has_assistant {
+            self.rewrite()?;
+        }
+        Ok(())
     }
     pub fn parent_session(&self) -> Option<&str> {
         self.header.parent_session.as_deref()
@@ -1683,6 +1723,54 @@ mod tests {
         assert_eq!(header["parentSession"], "parent-1");
         assert_eq!(header["subagent"]["childId"], "/root/x");
         assert_eq!(header["subagent"]["agent"], "scout");
+    }
+
+    #[test]
+    fn prompt_history_lives_in_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("w");
+        let mut s = Session::create(dir.path(), &cwd);
+        assert_eq!(s.prompt_history(), None);
+        // Not written before the first assistant message (Pi lazy files).
+        s.set_prompt_history(&["/name x".into()]).unwrap();
+        assert!(!s.path().exists());
+        s.append_message(&user("hi")).unwrap();
+        s.append_message(&assistant("hello")).unwrap();
+        let first_line = |p: &Path| -> Value {
+            serde_json::from_str(fs::read_to_string(p).unwrap().lines().next().unwrap()).unwrap()
+        };
+        assert_eq!(first_line(s.path())["promptHistory"], json!(["/name x"]));
+        // Later changes rewrite the header in place.
+        s.set_prompt_history(&["!ls".into(), "hi".into(), "/name x".into()])
+            .unwrap();
+        let text = fs::read_to_string(s.path()).unwrap();
+        assert_eq!(text.lines().count(), 3);
+        assert_eq!(
+            first_line(s.path())["promptHistory"],
+            json!(["!ls", "hi", "/name x"])
+        );
+        let reopened = Session::open(s.path()).unwrap();
+        assert_eq!(reopened.prompt_history().unwrap(), ["!ls", "hi", "/name x"]);
+        assert!(reopened.diagnostics().is_empty());
+        assert_eq!(reopened.context().len(), 2);
+
+        // Archived qt appended metadata lines carrying the history.
+        let legacy = dir.path().join("legacy.jsonl");
+        fs::write(
+            &legacy,
+            concat!(
+                r#"{"type":"session","version":3,"id":"l1","timestamp":"t","cwd":"/p"}"#,
+                "\n",
+                r#"{"type":"session","version":3,"id":"l1","timestamp":"t","cwd":"/p","promptHistory":["old"]}"#,
+                "\n",
+                r#"{"type":"session","version":3,"id":"l1","timestamp":"t","cwd":"/p","promptHistory":["new","old"]}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let legacy = Session::open(&legacy).unwrap();
+        assert_eq!(legacy.prompt_history().unwrap(), ["new", "old"]);
+        assert!(legacy.diagnostics().is_empty());
     }
 
     #[test]

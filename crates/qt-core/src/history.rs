@@ -359,6 +359,29 @@ impl PromptHistoryStore {
     }
 }
 
+/// A session's prompt history (header `promptHistory`, newest first) after
+/// submitting `prompt`: trimmed, consecutive duplicates collapsed, at most
+/// `limit` entries and [`MAXIMUM_PROMPT_HISTORY_BYTES`] of text.
+pub fn push_session_prompt(history: &[String], prompt: &str, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let prompt = prompt.trim();
+    let mut next: Vec<String> = Vec::with_capacity(history.len() + 1);
+    if !prompt.is_empty() && history.first().map(String::as_str) != Some(prompt) {
+        next.push(prompt.to_string());
+    }
+    let mut bytes = next.first().map_or(0, String::len);
+    for entry in history {
+        if next.len() >= limit || bytes + entry.len() > MAXIMUM_PROMPT_HISTORY_BYTES {
+            break;
+        }
+        bytes += entry.len();
+        next.push(entry.clone());
+    }
+    next
+}
+
 /// Up/Down navigation over a newest-first history list, keeping the
 /// unsent draft.
 #[derive(Debug, Clone, Default)]
@@ -431,6 +454,21 @@ impl HistoryCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_prompt_history_pushes_newest_first_within_limits() {
+        let h = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(push_session_prompt(&[], " /name x ", 3), h(&["/name x"]));
+        assert_eq!(push_session_prompt(&h(&["a"]), "a", 3), h(&["a"]));
+        assert_eq!(push_session_prompt(&h(&["a"]), "  ", 3), h(&["a"]));
+        assert_eq!(
+            push_session_prompt(&h(&["c", "b", "a"]), "!ls", 3),
+            h(&["!ls", "c", "b"])
+        );
+        assert!(push_session_prompt(&h(&["a"]), "b", 0).is_empty());
+        let big = "x".repeat(MAXIMUM_PROMPT_HISTORY_BYTES - 1);
+        assert_eq!(push_session_prompt(&[big], "yy", 10), h(&["yy"]));
+    }
 
     #[test]
     fn append_load_trim_dedupe_and_limit() {

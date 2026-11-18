@@ -119,6 +119,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] Command palette / slash commands with autocomplete (all built-ins listed in the inventory).
 - [ ] `/settings` panel, `/session` and `/status` info, `/context` inspector, `/export` (HTML + JSONL), `/share` (gist), `/copy`, `/name`, `/changelog`, `/scoped-models` / `enabledModels`, model refresh.
 - [x] Image paste and drop into the composer; prompt history (`history.jsonl`) with Up/Down; external editor.
+- [x] Status line (archived footer: cwd + git branch + session name, `(provider) model • thinking`, OpenRouter credits every 5 min), startup diagnostics as notifications, 5 s memory review notification, live compaction/branch markers after compactions outside the view's runs, `terminal.promptHistoryLimit` in Settings, per-session `promptHistory` header (every submitted line). Verified on Xvfb 2026-11-18. Gap: an extension *command* calling `ctx.compact()` fails with a reentrancy error in `qt-extensions` (input hooks work).
 - [x] HTML export renderer.
 
 ## Milestone 10: Extensions

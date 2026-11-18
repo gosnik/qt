@@ -3248,23 +3248,24 @@ impl Conversation {
         crate::export::last_assistant_text(&self.lock().messages)
     }
 
-    /// Prompts typed in this session, newest first (consecutive duplicates
-    /// collapsed), for Up/Down history.
+    /// Prompts submitted in this session, newest first, for Up/Down history:
+    /// the header's `promptHistory` (every submitted line, including
+    /// `/commands` and `!shell` lines; archived qt), or for sessions without
+    /// one (Pi files, older qt sessions) the user messages with consecutive
+    /// duplicates collapsed.
     pub fn prompt_history(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for entry in self.lock().session.entries().iter().rev() {
-            if let Some(text) = entry
-                .message()
-                .filter(|m| m.is_user())
-                .and_then(AgentMessage::user_text)
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                && out.last() != Some(&text)
-            {
-                out.push(text);
-            }
-        }
-        out
+        session_prompt_history(&self.lock().session)
+    }
+
+    /// Record a submitted composer line in the session header's
+    /// `promptHistory` (`terminal.promptHistoryLimit` entries), rewriting
+    /// the session file once it has been written.
+    pub fn record_prompt(&self, prompt: &str) -> Result<()> {
+        let limit = self.engine.settings().prompt_history_limit();
+        let mut state = self.lock();
+        let current = session_prompt_history(&state.session);
+        let next = crate::history::push_session_prompt(&current, prompt, limit);
+        state.session.set_prompt_history(&next)
     }
 
     /// The whole session (every branch) as HTML.
@@ -3273,7 +3274,29 @@ impl Conversation {
         let path = state.session.path().display().to_string();
         crate::export::render_session_html(state.session.header(), state.session.entries(), &path)
     }
+}
 
+fn session_prompt_history(session: &Session) -> Vec<String> {
+    if let Some(history) = session.prompt_history() {
+        return history;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for entry in session.entries().iter().rev() {
+        if let Some(text) = entry
+            .message()
+            .filter(|m| m.is_user())
+            .and_then(AgentMessage::user_text)
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            && out.last() != Some(&text)
+        {
+            out.push(text);
+        }
+    }
+    out
+}
+
+impl Conversation {
     /// Export to HTML at `path`, or `qt-session-<id>.html` in the working
     /// directory. Returns the written path.
     pub fn export_html(&self, path: Option<&Path>) -> Result<PathBuf> {
@@ -3452,6 +3475,34 @@ mod tests {
         }
         let empty = engine.new_conversation_with_parent(None, Some(String::new()), None);
         assert_eq!(empty.parent_session(), None);
+    }
+
+    #[test]
+    fn prompt_history_records_every_submitted_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(AgentHome::new(dir.path().join("home")), dir.path()).unwrap();
+        let conv = engine.new_conversation(None);
+        conv.push_message_for_test(AgentMessage::Llm(Message::user_text("hi")));
+        conv.push_message_for_test(AgentMessage::Llm(Message::Assistant(AssistantMessage {
+            stop_reason: StopReason::Stop,
+            ..Default::default()
+        })));
+        // Without a header history, user messages are the history.
+        assert_eq!(conv.prompt_history(), ["hi"]);
+        conv.record_prompt("hi").unwrap();
+        conv.record_prompt("/name demo").unwrap();
+        conv.record_prompt("!ls").unwrap();
+        assert_eq!(conv.prompt_history(), ["!ls", "/name demo", "hi"]);
+        let reopened = engine.open_conversation(&conv.session_path()).unwrap();
+        assert_eq!(reopened.prompt_history(), ["!ls", "/name demo", "hi"]);
+        engine
+            .update_settings(|s| {
+                s.raw_mut()
+                    .insert("terminal".into(), json!({"promptHistoryLimit": 2}));
+            })
+            .unwrap();
+        reopened.record_prompt("next").unwrap();
+        assert_eq!(reopened.prompt_history(), ["next", "!ls"]);
     }
 
     #[test]

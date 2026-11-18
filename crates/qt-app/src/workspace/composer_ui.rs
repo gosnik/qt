@@ -306,6 +306,27 @@ impl Workspace {
             return;
         }
         self.history.push(text);
+        // The session header's `promptHistory` (archived qt); rewriting the
+        // session file runs on the engine's blocking pool.
+        let conversation = self.conversation.clone();
+        let prompt = text.to_string();
+        let handle = self
+            .engine
+            .runtime_handle()
+            .spawn_blocking(move || conversation.record_prompt(&prompt));
+        cx.spawn_in(window, async move |_, cx| {
+            if let Ok(Err(err)) = handle.await {
+                let _ = cx.update(|window, cx| {
+                    window.push_notification(
+                        Notification::warning(format!(
+                            "Could not save session prompt history: {err:#}"
+                        )),
+                        cx,
+                    )
+                });
+            }
+        })
+        .detach();
         let store = self.engine.prompt_history();
         if store.max_entries() > 0
             && let Err(err) = store.append(text)

@@ -126,6 +126,23 @@ pub fn set_enabled_models(settings: &mut Settings, models: &[String]) {
     }
 }
 
+/// Archived `/settings` choices for `terminal.promptHistoryLimit`.
+pub const PROMPT_HISTORY_LIMITS: [usize; 7] = [0, 50, 100, 250, 500, 1000, 5000];
+
+/// Store `terminal.promptHistoryLimit`, replacing a non-object `terminal`.
+pub fn set_prompt_history_limit(settings: &mut Settings, limit: usize) {
+    let terminal = settings
+        .raw_mut()
+        .entry("terminal".to_string())
+        .or_insert_with(|| json!({}));
+    if !terminal.is_object() {
+        *terminal = json!({});
+    }
+    if let Some(map) = terminal.as_object_mut() {
+        map.insert("promptHistoryLimit".into(), json!(limit));
+    }
+}
+
 /// Callbacks into the workspace.
 pub struct SettingsHooks {
     /// Settings changed; re-read whatever depends on them.
@@ -399,6 +416,42 @@ impl Render for SettingsPanel {
             ));
         }
 
+        // Prompt history (archived `prompt_history_limit`). The workspace
+        // reloads its history on `changed`, which compacts `history.jsonl`
+        // to the new limit (0 deletes it).
+        let limits: Vec<(usize, &'static str)> = PROMPT_HISTORY_LIMITS
+            .iter()
+            .zip(["0", "50", "100", "250", "500", "1000", "5000"])
+            .map(|(n, label)| (*n, label))
+            .collect();
+        let history_limit = self.choice(
+            "prompt-history-limit",
+            &limits,
+            settings.prompt_history_limit(),
+            |this, limit, window, cx| {
+                this.save(|s| set_prompt_history_limit(s, limit), window, cx);
+            },
+            cx,
+        );
+        body = body.child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .py_1()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .child(div().text_sm().child("Prompt history"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme_colors.muted_foreground)
+                                .child("Maximum prompts retained in the global qt history"),
+                        ),
+                )
+                .child(history_limit),
+        );
+
         body = body
             .child(heading("AGENT", cx))
             .child(self.row(
@@ -598,7 +651,10 @@ pub fn open(
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the gpui glob import would shadow `#[test]`.
-    use super::{BOOL_SETTINGS, get_bool, set_bool, set_enabled_models, set_theme_setting};
+    use super::{
+        BOOL_SETTINGS, PROMPT_HISTORY_LIMITS, get_bool, set_bool, set_enabled_models,
+        set_prompt_history_limit, set_theme_setting,
+    };
     use qt_core::Settings;
     use serde_json::json;
 
@@ -616,6 +672,24 @@ mod tests {
         set_bool(&mut s, "hideThinkingBlock", true);
         assert!(get_bool(&s, "hideThinkingBlock", false));
         assert_eq!(BOOL_SETTINGS.len(), 6);
+    }
+
+    #[test]
+    fn prompt_history_limit_setting() {
+        let mut s = Settings::default();
+        assert_eq!(s.prompt_history_limit(), 500);
+        assert!(PROMPT_HISTORY_LIMITS.contains(&500));
+        s.raw_mut().insert("terminal".into(), json!("bogus"));
+        set_prompt_history_limit(&mut s, 50);
+        assert_eq!(s.raw()["terminal"], json!({"promptHistoryLimit": 50}));
+        s.raw_mut()
+            .insert("terminal".into(), json!({"showProgress": true}));
+        set_prompt_history_limit(&mut s, 0);
+        assert_eq!(
+            s.raw()["terminal"],
+            json!({"showProgress": true, "promptHistoryLimit": 0})
+        );
+        assert_eq!(s.prompt_history_limit(), 0);
     }
 
     #[test]
