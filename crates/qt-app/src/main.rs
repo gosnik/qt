@@ -1,14 +1,21 @@
 //! qt desktop application.
 
-mod keys_dialog;
+mod composer;
+mod dialogs;
+mod login;
 mod model_picker;
+mod ollama_panel;
+mod run_status;
+mod session_views;
+mod sessions;
+mod settings_panel;
+mod theme;
 mod transcript;
 mod workspace;
 
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use qt_core::{AgentHome, Engine};
 
@@ -47,7 +54,6 @@ fn main() -> Result<()> {
         return Ok(());
     };
     let engine = Engine::new(AgentHome::from_env(), cwd)?;
-    let theme_pref = engine.settings().theme();
     let project = engine
         .cwd()
         .file_name()
@@ -59,11 +65,7 @@ fn main() -> Result<()> {
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             workspace::bind_keys(cx);
-            match theme_pref.as_deref() {
-                Some("dark") => Theme::change(ThemeMode::Dark, None, cx),
-                Some("light") => Theme::change(ThemeMode::Light, None, cx),
-                _ => Theme::sync_system_appearance(None, cx),
-            }
+            theme::init(&engine, cx);
             let bounds = Bounds::centered(None, size(px(1240.), px(860.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

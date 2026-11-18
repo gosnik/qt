@@ -1,9 +1,11 @@
 //! The conversation transcript: a virtualised list of user turns, streamed
-//! markdown, thinking blocks and tool-call cards.
+//! markdown, thinking blocks, tool-call cards, compaction / branch
+//! summaries and custom messages.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -11,10 +13,13 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use qt_core::AgentEvent;
 use qt_core::message::{
-    AssistantMessage, ContentBlock, Message, StopReason, ToolResultMessage, UserContent,
+    AgentMessage, AssistantMessage, BashExecutionMessage, ContentBlock, Message, StopReason,
+    ToolResultMessage, UserContent,
 };
 use qt_core::provider::StreamEvent;
 use serde_json::Value;
+
+use crate::theme::QtPalette;
 
 /// Lines of tool output shown while a card is collapsed.
 const PREVIEW_LINES: usize = 6;
@@ -40,10 +45,19 @@ struct ToolItem {
     expanded: bool,
 }
 
+/// Which kind of harness summary an item shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SummaryKind {
+    Compaction { tokens_before: u64 },
+    Branch,
+}
+
 enum Item {
     User {
         text: SharedString,
         images: usize,
+        /// Session entry id, when known (enables "fork from here").
+        entry_id: Option<String>,
     },
     Text(Entity<TextViewState>),
     Thinking {
@@ -52,9 +66,27 @@ enum Item {
         streaming: bool,
     },
     Tool(ToolItem),
+    Summary {
+        kind: SummaryKind,
+        state: Entity<TextViewState>,
+        expanded: bool,
+    },
+    Custom {
+        custom_type: SharedString,
+        state: Entity<TextViewState>,
+    },
+    Bash(BashExecutionMessage),
     Error(SharedString),
     Notice(SharedString),
 }
+
+/// Events the workspace reacts to.
+pub enum TranscriptEvent {
+    /// Fork a new session before the user message with this entry id.
+    Fork(String),
+}
+
+impl EventEmitter<TranscriptEvent> for Transcript {}
 
 pub struct Transcript {
     items: Vec<Item>,
@@ -64,6 +96,7 @@ pub struct Transcript {
     /// Tool call id -> item index.
     tool_items: HashMap<String, usize>,
     cwd: PathBuf,
+    hide_thinking: bool,
     _observers: Vec<Subscription>,
 }
 
@@ -75,6 +108,7 @@ impl Transcript {
             stream_items: HashMap::new(),
             tool_items: HashMap::new(),
             cwd: cwd.to_path_buf(),
+            hide_thinking: false,
             _observers: Vec::new(),
         }
     }
@@ -83,16 +117,37 @@ impl Transcript {
         self.items.is_empty()
     }
 
-    /// Replace the transcript with a stored conversation.
-    pub fn load(&mut self, messages: &[Message], cx: &mut Context<Self>) {
+    /// `hideThinkingBlock`: show thinking as a one-line marker only.
+    pub fn set_hide_thinking(&mut self, hide: bool, cx: &mut Context<Self>) {
+        if self.hide_thinking != hide {
+            self.hide_thinking = hide;
+            let count = self.items.len();
+            self.scroller
+                .update(cx, |s, cx| s.remeasure_items(0..count, cx));
+            cx.notify();
+        }
+    }
+
+    /// Replace the transcript with a stored context. `user_ids` holds the
+    /// session entry id of each user message (see
+    /// [`crate::sessions::user_entry_ids`]).
+    pub fn load(
+        &mut self,
+        messages: &[AgentMessage],
+        user_ids: &[Option<String>],
+        cx: &mut Context<Self>,
+    ) {
         self.items.clear();
         self.stream_items.clear();
         self.tool_items.clear();
         self._observers.clear();
-        for message in messages {
+        for (index, message) in messages.iter().enumerate() {
+            let entry_id = user_ids.get(index).cloned().flatten();
             match message {
-                Message::User { content, .. } => self.push_user(content),
-                Message::Assistant(a) => {
+                AgentMessage::Llm(Message::User { content, .. }) => {
+                    self.push_user(content, entry_id)
+                }
+                AgentMessage::Llm(Message::Assistant(a)) => {
                     for block in &a.content {
                         match block {
                             ContentBlock::Text { text } if !text.trim().is_empty() => {
@@ -119,7 +174,8 @@ impl Transcript {
                     }
                     self.push_stop_notice(a);
                 }
-                Message::ToolResult(r) => self.apply_tool_result(r),
+                AgentMessage::Llm(Message::ToolResult(r)) => self.apply_tool_result(r),
+                other => self.push_harness(other, cx),
             }
         }
         // Calls left without a result belong to an interrupted run.
@@ -139,21 +195,44 @@ impl Transcript {
         cx.notify();
     }
 
+    /// Assign entry ids to user messages from the end (after a run, when
+    /// the live user messages have been persisted).
+    pub fn set_user_entry_ids(&mut self, ids: &[String], cx: &mut Context<Self>) {
+        let mut ids = ids.to_vec();
+        for item in self.items.iter_mut().rev() {
+            if let Item::User { entry_id, .. } = item {
+                match ids.pop() {
+                    Some(id) => *entry_id = Some(id),
+                    None => break,
+                }
+            }
+        }
+        cx.notify();
+    }
+
     pub fn apply_event(&mut self, event: &AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::AgentStart
             | AgentEvent::Warning(_)
             | AgentEvent::AgentEnd { .. }
-            | AgentEvent::CustomMessageEnd(_)
             | AgentEvent::QueueUpdate { .. }
             | AgentEvent::CompactionStart { .. }
             | AgentEvent::CompactionEnd { .. }
             | AgentEvent::RetryStart { .. }
             | AgentEvent::RetryEnd { .. } => {}
+            AgentEvent::CustomMessageEnd(message) => {
+                let before = self.items.len();
+                self.push_harness(message, cx);
+                let added = self.items.len() - before;
+                if added > 0 {
+                    self.appended(added, cx);
+                    self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
+                }
+            }
             AgentEvent::AssistantStart => self.stream_items.clear(),
             AgentEvent::Stream(stream) => self.apply_stream(stream, cx),
             AgentEvent::MessageEnd(Message::User { content, .. }) => {
-                self.push_user(content);
+                self.push_user(content, None);
                 self.appended(1, cx);
                 self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
             }
@@ -177,6 +256,39 @@ impl Transcript {
                 }
                 self.changed(index, cx);
             }
+        }
+    }
+
+    /// Harness messages: summaries, displayed custom messages, user bash.
+    fn push_harness(&mut self, message: &AgentMessage, cx: &mut Context<Self>) {
+        match message {
+            AgentMessage::CompactionSummary(c) => {
+                let state = self.markdown_state(&c.summary, cx);
+                self.items.push(Item::Summary {
+                    kind: SummaryKind::Compaction {
+                        tokens_before: c.tokens_before,
+                    },
+                    state,
+                    expanded: false,
+                });
+            }
+            AgentMessage::BranchSummary(b) => {
+                let state = self.markdown_state(&b.summary, cx);
+                self.items.push(Item::Summary {
+                    kind: SummaryKind::Branch,
+                    state,
+                    expanded: false,
+                });
+            }
+            AgentMessage::Custom(c) if c.display => {
+                let state = self.markdown_state(&c.content.plain_text(), cx);
+                self.items.push(Item::Custom {
+                    custom_type: c.custom_type.clone().into(),
+                    state,
+                });
+            }
+            AgentMessage::BashExecution(b) => self.items.push(Item::Bash(b.clone())),
+            AgentMessage::Custom(_) | AgentMessage::Llm(_) => {}
         }
     }
 
@@ -260,7 +372,7 @@ impl Transcript {
         }
     }
 
-    fn push_user(&mut self, content: &UserContent) {
+    fn push_user(&mut self, content: &UserContent, entry_id: Option<String>) {
         let images = match content {
             UserContent::Blocks(blocks) => blocks
                 .iter()
@@ -271,6 +383,7 @@ impl Transcript {
         self.items.push(Item::User {
             text: content.plain_text().into(),
             images,
+            entry_id,
         });
     }
 
@@ -348,6 +461,7 @@ impl Transcript {
         match self.items.get_mut(index) {
             Some(Item::Tool(tool)) => tool.expanded = !tool.expanded,
             Some(Item::Thinking { expanded, .. }) => *expanded = !*expanded,
+            Some(Item::Summary { expanded, .. }) => *expanded = !*expanded,
             _ => return,
         }
         self.changed(Some(index), cx);
@@ -360,8 +474,13 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
+        let palette = QtPalette::get(cx);
         let body: AnyElement = match &self.items[index] {
-            Item::User { text, images } => {
+            Item::User {
+                text,
+                images,
+                entry_id,
+            } => {
                 let mut lines = v_flex().gap_0p5().text_sm();
                 for line in text.split('\n') {
                     lines = lines.child(
@@ -370,9 +489,30 @@ impl Transcript {
                             .child(SharedString::from(line.to_string())),
                     );
                 }
+                let fork = entry_id.clone().map(|id| {
+                    Button::new(("fork", index))
+                        .icon(IconName::Undo2)
+                        .xsmall()
+                        .ghost()
+                        .tooltip("Fork a new session from this message")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(TranscriptEvent::Fork(id.clone()))
+                        }))
+                });
                 h_flex()
+                    .group("user-message")
                     .w_full()
                     .justify_end()
+                    .items_start()
+                    .gap_1()
+                    .when_some(fork, |el, fork| {
+                        el.child(
+                            div()
+                                .invisible()
+                                .group_hover("user-message", |s| s.visible())
+                                .child(fork),
+                        )
+                    })
                     .child(
                         v_flex()
                             .max_w(relative(0.85))
@@ -380,8 +520,8 @@ impl Transcript {
                             .px_4()
                             .py_2p5()
                             .rounded_lg()
-                            .bg(theme.secondary)
-                            .text_color(theme.secondary_foreground)
+                            .bg(palette.user_bg)
+                            .text_color(palette.user_fg)
                             .child(lines)
                             .when(*images > 0, |el| {
                                 el.child(
@@ -404,8 +544,9 @@ impl Transcript {
                 expanded,
                 streaming,
             } => {
-                let expanded = *expanded;
-                let label = if *streaming {
+                let hidden = self.hide_thinking;
+                let expanded = *expanded && !hidden;
+                let label = if *streaming || hidden {
                     "Thinking…"
                 } else {
                     "Thought process"
@@ -419,18 +560,22 @@ impl Transcript {
                             .gap_1p5()
                             .items_center()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .cursor_pointer()
-                            .hover(|s| s.text_color(theme.foreground))
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
-                            .child(
-                                Icon::new(if expanded {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .xsmall(),
-                            )
+                            .text_color(palette.thinking_text)
+                            .when(!hidden, |el| {
+                                el.cursor_pointer()
+                                    .hover(|s| s.text_color(theme.foreground))
+                                    .on_click(
+                                        cx.listener(move |this, _, _, cx| this.toggle(index, cx)),
+                                    )
+                                    .child(
+                                        Icon::new(if expanded {
+                                            IconName::ChevronDown
+                                        } else {
+                                            IconName::ChevronRight
+                                        })
+                                        .xsmall(),
+                                    )
+                            })
                             .child(label),
                     )
                     .when(expanded, |el| {
@@ -441,13 +586,146 @@ impl Transcript {
                                 .border_l_2()
                                 .border_color(theme.border)
                                 .text_xs()
-                                .text_color(theme.muted_foreground)
+                                .text_color(palette.thinking_text)
                                 .child(TextView::new(state).selectable(true)),
                         )
                     })
                     .into_any_element()
             }
-            Item::Tool(tool) => self.render_tool(tool, index, &theme, cx),
+            Item::Tool(tool) => self.render_tool(tool, index, &theme, &palette, cx),
+            Item::Summary {
+                kind,
+                state,
+                expanded,
+            } => {
+                let expanded = *expanded;
+                let (tag, line) = match kind {
+                    SummaryKind::Compaction { tokens_before } => (
+                        "[compaction]",
+                        format!("Compacted from {} tokens", group_thousands(*tokens_before)),
+                    ),
+                    SummaryKind::Branch => ("[branch]", "Branch summary".to_string()),
+                };
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(palette.custom_bg)
+                    .child(
+                        h_flex()
+                            .id(("summary", index))
+                            .gap_2()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(palette.custom_label)
+                                    .child(tag),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_sm()
+                                    .text_color(palette.custom_fg)
+                                    .child(line),
+                            )
+                            .child(div().text_xs().text_color(palette.dim).child(if expanded {
+                                "click to collapse"
+                            } else {
+                                "click to expand"
+                            })),
+                    )
+                    .when(expanded, |el| {
+                        el.child(
+                            div()
+                                .text_sm()
+                                .text_color(palette.custom_fg)
+                                .child(TextView::new(state).selectable(true)),
+                        )
+                    })
+                    .into_any_element()
+            }
+            Item::Custom { custom_type, state } => v_flex()
+                .w_full()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(palette.custom_bg)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(palette.custom_label)
+                        .child(format!("[{custom_type}]")),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(palette.custom_fg)
+                        .child(TextView::new(state).selectable(true)),
+                )
+                .into_any_element(),
+            Item::Bash(bash) => {
+                let mut status = Vec::new();
+                if bash.cancelled {
+                    status.push("(command cancelled)".to_string());
+                } else if let Some(code) = bash.exit_code.filter(|c| *c != 0) {
+                    status.push(format!("Command exited with code {code}"));
+                }
+                if bash.exclude_from_context {
+                    status.push("not sent to the model".into());
+                }
+                v_flex()
+                    .w_full()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .overflow_hidden()
+                    .child(
+                        h_flex()
+                            .px_3()
+                            .py_1p5()
+                            .gap_2()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_sm()
+                            .child(Icon::new(IconName::SquareTerminal).small())
+                            .child(format!("$ {}", bash.command)),
+                    )
+                    .child(
+                        div()
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .child(render_output(
+                                if bash.output.is_empty() {
+                                    "(no output)"
+                                } else {
+                                    &bash.output
+                                },
+                                PREVIEW_LINES * 2,
+                                true,
+                                0,
+                                &theme,
+                                palette.tool_output,
+                            )),
+                    )
+                    .when(!status.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .px_3()
+                                .pb_1p5()
+                                .text_xs()
+                                .text_color(palette.warning)
+                                .child(status.join(" · ")),
+                        )
+                    })
+                    .into_any_element()
+            }
             Item::Error(message) => h_flex()
                 .w_full()
                 .gap_2()
@@ -484,14 +762,21 @@ impl Transcript {
         tool: &ToolItem,
         index: usize,
         theme: &component::Theme,
+        palette: &QtPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (icon, color) = match tool.status {
-            ToolStatus::Pending | ToolStatus::Running => {
-                (IconName::LoaderCircle, theme.muted_foreground)
-            }
-            ToolStatus::Done => (IconName::CircleCheck, theme.success),
-            ToolStatus::Failed => (IconName::CircleX, theme.danger),
+        let (icon, color, bg) = match tool.status {
+            ToolStatus::Pending | ToolStatus::Running => (
+                IconName::LoaderCircle,
+                theme.muted_foreground,
+                palette.tool_pending_bg,
+            ),
+            ToolStatus::Done => (
+                IconName::CircleCheck,
+                palette.success,
+                palette.tool_success_bg,
+            ),
+            ToolStatus::Failed => (IconName::CircleX, palette.error, palette.tool_error_bg),
         };
         let summary = tool_summary(&tool.name, &tool.args, &self.cwd);
         let running = matches!(tool.status, ToolStatus::Pending | ToolStatus::Running);
@@ -504,6 +789,7 @@ impl Transcript {
             .items_center()
             .px_3()
             .py_1p5()
+            .bg(bg)
             .cursor_pointer()
             .hover(|s| s.bg(theme.muted))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
@@ -513,6 +799,7 @@ impl Transcript {
                     .font_family(theme.mono_font_family.clone())
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.tool_title)
                     .child(tool.name.clone()),
             )
             .child(
@@ -540,7 +827,7 @@ impl Transcript {
         let body = if !show_body || (tool.output.trim().is_empty() && tool.diff.is_none()) {
             None
         } else if let Some(diff) = &tool.diff {
-            Some(self.render_diff(diff, tool.expanded, theme))
+            Some(self.render_diff(diff, tool.expanded, theme, palette))
         } else {
             let tail = tool.name == "bash";
             let limit = if tool.expanded {
@@ -548,7 +835,14 @@ impl Transcript {
             } else {
                 PREVIEW_LINES
             };
-            Some(render_output(&tool.output, limit, tail, tool.images, theme))
+            Some(render_output(
+                &tool.output,
+                limit,
+                tail,
+                tool.images,
+                theme,
+                palette.tool_output,
+            ))
         };
 
         v_flex()
@@ -566,7 +860,13 @@ impl Transcript {
             .into_any_element()
     }
 
-    fn render_diff(&self, diff: &str, expanded: bool, theme: &component::Theme) -> AnyElement {
+    fn render_diff(
+        &self,
+        diff: &str,
+        expanded: bool,
+        theme: &component::Theme,
+        palette: &QtPalette,
+    ) -> AnyElement {
         let lines: Vec<&str> = diff
             .lines()
             .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
@@ -579,13 +879,13 @@ impl Transcript {
             .text_xs();
         for line in lines.iter().take(limit) {
             let (bg, fg) = if line.starts_with('+') {
-                (theme.success.opacity(0.12), theme.foreground)
+                (palette.diff_added.opacity(0.14), theme.foreground)
             } else if line.starts_with('-') {
-                (theme.danger.opacity(0.12), theme.foreground)
+                (palette.diff_removed.opacity(0.14), theme.foreground)
             } else if line.starts_with("@@") {
                 (theme.transparent, theme.info)
             } else {
-                (theme.transparent, theme.muted_foreground)
+                (theme.transparent, palette.diff_context)
             };
             col = col.child(
                 div()
@@ -608,12 +908,26 @@ impl Transcript {
     }
 }
 
+/// `12345` → `12,345` (Pi uses `toLocaleString()` for token counts).
+pub fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn render_output(
     output: &str,
     limit: usize,
     tail: bool,
     images: usize,
     theme: &component::Theme,
+    color: Hsla,
 ) -> AnyElement {
     let lines: Vec<&str> = output.lines().collect();
     let hidden = lines.len().saturating_sub(limit);
@@ -628,7 +942,7 @@ fn render_output(
         .py_1p5()
         .font_family(theme.mono_font_family.clone())
         .text_xs()
-        .text_color(theme.muted_foreground);
+        .text_color(color);
     let more = |n: usize| {
         div()
             .italic()
@@ -729,7 +1043,7 @@ impl Render for Transcript {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the gpui glob import would shadow `#[test]`.
-    use super::tool_summary;
+    use super::{group_thousands, tool_summary};
     use serde_json::json;
     use std::path::Path;
 
@@ -753,5 +1067,13 @@ mod tests {
             "fn in src"
         );
         assert_eq!(tool_summary("ls", &json!({}), cwd).as_ref(), ".");
+    }
+
+    #[test]
+    fn thousands_are_grouped() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1_000), "1,000");
+        assert_eq!(group_thousands(123_456_789), "123,456,789");
     }
 }
