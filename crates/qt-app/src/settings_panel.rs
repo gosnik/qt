@@ -263,12 +263,16 @@ impl SettingsPanel {
             .items_center()
             .py_1()
             .child(
-                v_flex().flex_1().child(div().text_sm().child(label)).child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(help),
-                ),
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().text_sm().child(label))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(help),
+                    ),
             )
             .child(Switch::new(id).checked(checked).on_click(cx.listener(
                 move |this, value: &bool, window, cx| on_change(this, *value, window, cx),
@@ -284,7 +288,7 @@ impl SettingsPanel {
         on_pick: impl Fn(&mut Self, T, &mut Window, &mut Context<Self>) + Clone + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut group = h_flex().gap_1();
+        let mut group = h_flex().flex_wrap().justify_end().gap_1();
         for (i, (value, label)) in options.iter().enumerate() {
             let value = *value;
             let on_pick = on_pick.clone();
@@ -359,8 +363,8 @@ impl Render for SettingsPanel {
 
         let mut body = v_flex()
             .id("settings-body")
+            .size_full()
             .gap_1()
-            .max_h(px(600.))
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .pr_2()
@@ -381,7 +385,7 @@ impl Render for SettingsPanel {
                                     .child("JSON themes reload when their file changes"),
                             ),
                     )
-                    .child(div().flex_1().child(themes))
+                    .child(div().flex_1().min_w_0().child(themes))
                     .child(
                         Button::new("theme-reload")
                             .icon(IconName::RefreshCw)
@@ -638,12 +642,9 @@ pub fn open(
         )
     });
     let view = panel.clone();
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Settings")
-            .w(px(640.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("Settings"), window, 640., view.clone())
             .on_ok(|_, _, _| false)
-            .child(view.clone())
     });
     panel
 }

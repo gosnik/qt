@@ -134,22 +134,25 @@ pub fn open_rename(
     });
 }
 
-/// Pick a user message to fork from (`/fork`).
-pub fn open_fork_picker(
+/// Runs with the id of the message picked in `/fork`.
+type ForkHandler = Rc<dyn Fn(String, &mut Window, &mut App)>;
+
+/// The `/fork` message list.
+struct ForkPicker {
     messages: Vec<(String, String)>,
-    on_pick: impl Fn(String, &mut Window, &mut App) + 'static,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let on_pick = Rc::new(on_pick);
-    window.open_dialog(cx, move |dialog, _, cx| {
+    on_pick: ForkHandler,
+}
+
+impl Render for ForkPicker {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let mut list = v_flex()
             .id("fork-list")
             .gap_0p5()
-            .max_h(px(420.))
+            .flex_1()
+            .min_h(px(100.))
             .overflow_y_scroll();
-        if messages.is_empty() {
+        if self.messages.is_empty() {
             list = list.child(
                 div()
                     .text_sm()
@@ -157,9 +160,9 @@ pub fn open_fork_picker(
                     .child("No messages to fork from"),
             );
         }
-        for (i, (id, text)) in messages.iter().enumerate().rev() {
+        for (i, (id, text)) in self.messages.iter().enumerate().rev() {
             let id = id.clone();
-            let pick = on_pick.clone();
+            let pick = self.on_pick.clone();
             list = list.child(
                 div()
                     .id(("fork-item", i))
@@ -176,21 +179,38 @@ pub fn open_fork_picker(
                     .child(first_line_truncated(text, 100)),
             );
         }
-        dialog
-            .title("Fork from a message")
-            .on_ok(|_, _, _| false)
-            .w(px(620.))
+        v_flex()
+            .size_full()
+            .gap_2()
             .child(
-                v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("The new session ends before the selected message, which is put back in the composer."),
-                    )
-                    .child(list),
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("The new session ends before the selected message, which is put back in the composer."),
             )
+            .child(list)
+    }
+}
+
+/// Pick a user message to fork from (`/fork`).
+pub fn open_fork_picker(
+    messages: Vec<(String, String)>,
+    on_pick: impl Fn(String, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let view = cx.new(|_| ForkPicker {
+        messages,
+        on_pick: Rc::new(on_pick),
+    });
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(
+            dialog.title("Fork from a message"),
+            window,
+            620.,
+            view.clone(),
+        )
+        .on_ok(|_, _, _| false)
     });
 }
 

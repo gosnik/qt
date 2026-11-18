@@ -170,7 +170,8 @@ impl Render for Picker {
         let mut list = v_flex()
             .id("picker-list")
             .track_scroll(&self.scroll)
-            .max_h(px(420.))
+            .flex_1()
+            .min_h(px(100.))
             .overflow_y_scroll()
             .gap_0p5();
         if self.filtered.is_empty() {
@@ -205,7 +206,7 @@ impl Render for Picker {
                     .child(
                         div()
                             .flex_none()
-                            .max_w(px(300.))
+                            .max_w(relative(0.5))
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
@@ -228,6 +229,7 @@ impl Render for Picker {
             );
         }
         v_flex()
+            .size_full()
             .gap_2()
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
                 this.move_selection(-1, cx);
@@ -263,12 +265,9 @@ pub fn open_picker(
     let query = picker.read(cx).query.clone();
     let title: SharedString = title.into();
     let view = picker.clone();
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title(title.clone())
-            .w(px(680.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title(title.clone()), window, 680., view.clone())
             .on_ok(|_, _, _| false)
-            .child(view.clone())
     });
     // The dialog takes focus when it opens; hand it to the query field.
     window.defer(cx, move |window, cx| {
