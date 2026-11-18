@@ -11,6 +11,7 @@ pub mod engine;
 pub mod message;
 pub mod prompt;
 pub mod provider;
+pub mod resources;
 pub mod session;
 pub mod sse;
 pub mod tools;

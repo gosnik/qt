@@ -12,6 +12,7 @@ chrono.workspace = true
 dirs.workspace = true
 futures.workspace = true
 globset.workspace = true
+notify.workspace = true
 ignore.workspace = true
 rand.workspace = true
 regex.workspace = true

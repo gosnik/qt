@@ -24,7 +24,8 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `similar` | Unified diffs for `edit` results |
 | `base64` | Image attachments |
 | `rand` | Session entry ids |
-| `libc` (unix) | Killing a bash process group on timeout or abort |
+| `libc` (unix) | Killing a bash process group on timeout or abort; local timezone abbreviation for the prompt's environment block |
+| `notify` | Cross-platform file watching for live theme reload (already in the lock file through GPUI) |
 | `tempfile` (dev) | Test fixtures |
 
 ## System packages
