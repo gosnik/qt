@@ -28,7 +28,8 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `unicode-normalization` | NFKC folding for the `edit` fuzzy-match fallback (Pi's `normalizeForFuzzyMatch`) |
 | `url` | URL parsing, redirect resolution and host classification for the web tools (already a `reqwest` dependency) |
 | `rand` | Session entry ids |
-| `libc` (unix) | Killing a bash process group on timeout or abort |
+| `libc` (unix) | Killing a bash process group on timeout or abort; local timezone abbreviation for the prompt's environment block |
+| `notify` | Cross-platform file watching for live theme reload (already in the lock file through GPUI) |
 | `tempfile` (dev) | Test fixtures |
 
 ## System packages

@@ -19,6 +19,7 @@ pub mod ollama;
 pub mod policy;
 pub mod prompt;
 pub mod provider;
+pub mod resources;
 pub mod session;
 pub mod sse;
 pub mod tools;
