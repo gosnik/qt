@@ -194,6 +194,14 @@ impl Engine {
         auth.save(&self.inner.home)
     }
 
+    /// Re-read `auth.json`, for example after `qt_core::auth::login_and_store`
+    /// or `qt_core::auth::logout` changed it.
+    pub fn reload_auth(&self) -> Result<()> {
+        let auth = AuthStore::load(&self.inner.home)?;
+        *self.inner.auth.write().expect("auth lock") = auth;
+        Ok(())
+    }
+
     /// The model from settings, if its provider is usable.
     pub fn default_model(&self) -> Option<ModelRef> {
         let settings = self.settings();

@@ -586,6 +586,7 @@ impl Summarizer {
                 .max(1)
                 .min(u32::MAX as u64) as u32,
             thinking: ThinkingLevel::Off,
+            ..Default::default()
         };
         let mut sink = |_e: provider::StreamEvent| {};
         let response =

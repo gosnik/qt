@@ -17,6 +17,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 dirs = "6"
 futures = "0.3"
 globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 ignore = "0.4"
 libc = "0.2"
 rand = "0.9"
@@ -24,6 +25,7 @@ regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
 similar = "2.7"
 tempfile = "3"
 thiserror = "2"

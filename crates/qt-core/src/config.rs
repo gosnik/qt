@@ -2,15 +2,19 @@
 //!
 //! The layout is shared with the archived C++ qt: the agent home defaults to
 //! `~/.qt` (override with `QT_CODING_AGENT_DIR`), settings live in
-//! `settings.json`, credentials in `auth.json` and sessions in `sessions/`.
-//! Unknown keys in both JSON files are preserved on write.
+//! `settings.json`, credentials in `auth.json` (see [`crate::auth`]), custom
+//! models in `models.json` and sessions in `sessions/`. Unknown keys in the
+//! JSON files are preserved on write.
 
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde_json::{Map, Value, json};
+
+pub use crate::auth::{AuthStore, env_var_for};
+pub use crate::ollama::OllamaInstance;
 
 /// Root directory for qt state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +45,14 @@ impl AgentHome {
     pub fn auth_path(&self) -> PathBuf {
         self.root.join("auth.json")
     }
+    /// Custom providers and model overrides (Pi `models.json`).
+    pub fn models_path(&self) -> PathBuf {
+        self.root.join("models.json")
+    }
+    /// Cached OpenRouter model metadata.
+    pub fn openrouter_cache_path(&self) -> PathBuf {
+        self.root.join("openrouter_models.json")
+    }
     pub fn sessions_dir(&self) -> PathBuf {
         self.root.join("sessions")
     }
@@ -50,25 +62,19 @@ impl AgentHome {
     }
 }
 
-/// An Ollama instance configured under `settings.ollama.instances`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OllamaInstance {
-    pub id: String,
-    pub base_url: String,
-    /// Model names recorded in settings (may be empty; the server is queried too).
-    pub models: Vec<String>,
-}
-
 /// `settings.json`, kept as a JSON object so unknown keys survive rewrites.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Settings {
     raw: Map<String, Value>,
+    /// The agent home the settings were loaded from.
+    home: Option<AgentHome>,
 }
 
 impl Settings {
     pub fn load(home: &AgentHome) -> Result<Self> {
         Ok(Self {
             raw: read_json_object(&home.settings_path())?,
+            home: Some(home.clone()),
         })
     }
 
@@ -87,6 +93,11 @@ impl Settings {
     /// Mutable access for subsystems that own their own settings keys.
     pub fn raw_mut(&mut self) -> &mut Map<String, Value> {
         &mut self.raw
+    }
+
+    /// Where these settings were loaded from, if from disk.
+    pub fn home(&self) -> Option<&AgentHome> {
+        self.home.as_ref()
     }
 
     fn str_key(&self, key: &str) -> Option<String> {
@@ -135,128 +146,104 @@ impl Settings {
             .unwrap_or(16_384)
     }
 
+    /// `images.autoResize` (default true): shrink images to provider limits.
+    pub fn image_auto_resize(&self) -> bool {
+        self.raw
+            .get("images")
+            .and_then(|i| i.get("autoResize"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    /// `retry.provider` as a policy for provider HTTP requests.
+    pub fn provider_retry(&self) -> crate::provider::RetryPolicy {
+        crate::provider::RetryPolicy::from_settings(self)
+    }
+
+    /// All configured Ollama instances (including disabled ones); malformed
+    /// settings yield an empty list (see [`Settings::try_ollama_settings`]).
+    pub fn ollama_settings(&self) -> Vec<OllamaInstance> {
+        self.try_ollama_settings().unwrap_or_default()
+    }
+
+    /// Parse `ollama.instances`, reporting validation errors.
+    pub fn try_ollama_settings(&self) -> Result<Vec<OllamaInstance>> {
+        match self.raw.get("ollama") {
+            Some(value) if value.get("instances").is_some() => {
+                crate::ollama::parse_instances(value)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Enabled Ollama instances.
     pub fn ollama_instances(&self) -> Vec<OllamaInstance> {
-        let Some(list) = self
-            .raw
-            .get("ollama")
-            .and_then(|o| o.get("instances"))
-            .and_then(Value::as_array)
-        else {
-            return Vec::new();
-        };
-        list.iter()
-            .filter(|inst| inst.get("enabled").and_then(Value::as_bool).unwrap_or(true))
-            .filter_map(|inst| {
-                let id = inst.get("id").and_then(Value::as_str)?.to_string();
-                let base_url = inst
-                    .get("baseUrl")
-                    .and_then(Value::as_str)?
-                    .trim_end_matches('/')
-                    .to_string();
-                let models = inst
-                    .get("models")
-                    .and_then(Value::as_array)
-                    .map(|models| {
-                        models
-                            .iter()
-                            .filter_map(|m| {
-                                m.get("name")
-                                    .or_else(|| m.get("id"))
-                                    .and_then(Value::as_str)
-                            })
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(OllamaInstance {
-                    id,
-                    base_url,
-                    models,
-                })
-            })
+        self.ollama_settings()
+            .into_iter()
+            .filter(|i| i.enabled)
             .collect()
     }
-}
 
-/// `auth.json`: `{ "version": 1, "providers": { "<id>": { "apiKey": "..." } } }`.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct AuthStore {
-    raw: Map<String, Value>,
-}
-
-impl AuthStore {
-    pub fn load(home: &AgentHome) -> Result<Self> {
-        Ok(Self {
-            raw: read_json_object(&home.auth_path())?,
-        })
-    }
-
-    pub fn save(&self, home: &AgentHome) -> Result<()> {
-        let mut raw = self.raw.clone();
-        raw.entry("version").or_insert(json!(1));
-        write_json_atomic(&home.auth_path(), &Value::Object(raw), true)
-    }
-
-    /// Stored key for `provider`, falling back to the provider's environment variable.
-    pub fn api_key(&self, provider: &str) -> Option<String> {
-        self.stored_api_key(provider).or_else(|| {
-            env_var_for(provider)
-                .and_then(|name| std::env::var(name).ok())
-                .filter(|v| !v.trim().is_empty())
-        })
-    }
-
-    pub fn stored_api_key(&self, provider: &str) -> Option<String> {
-        self.raw
-            .get("providers")
-            .and_then(|p| p.get(provider))
-            .and_then(|p| p.get("apiKey"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .filter(|k| !k.trim().is_empty())
-    }
-
-    pub fn set_api_key(&mut self, provider: &str, key: &str) {
-        let providers = self.raw.entry("providers").or_insert_with(|| json!({}));
-        if !providers.is_object() {
-            *providers = json!({});
+    /// Replace `ollama.instances`, keeping other keys under `ollama`.
+    pub fn set_ollama_instances(&mut self, instances: &[OllamaInstance]) {
+        let ollama = self.raw.entry("ollama").or_insert_with(|| json!({}));
+        if !ollama.is_object() {
+            *ollama = json!({});
         }
-        let providers = providers.as_object_mut().expect("object");
-        let entry = providers
-            .entry(provider.to_string())
-            .or_insert_with(|| json!({}));
-        if !entry.is_object() {
-            *entry = json!({});
-        }
-        entry
-            .as_object_mut()
-            .expect("object")
-            .insert("apiKey".into(), json!(key.trim()));
+        ollama.as_object_mut().expect("object").insert(
+            "instances".into(),
+            Value::Array(instances.iter().map(OllamaInstance::to_json).collect()),
+        );
     }
 
-    pub fn remove_api_key(&mut self, provider: &str) {
-        if let Some(entry) = self
-            .raw
-            .get_mut("providers")
-            .and_then(|p| p.get_mut(provider))
-            .and_then(Value::as_object_mut)
+    /// Add an instance; ids are validated and must be unique (case-insensitive).
+    pub fn add_ollama_instance(&mut self, instance: OllamaInstance) -> Result<()> {
+        if !crate::ollama::valid_instance_id(&instance.id) {
+            bail!("Ollama instance id must contain only letters, numbers, '-' or '_'");
+        }
+        if !(instance.base_url.starts_with("http://") || instance.base_url.starts_with("https://"))
         {
-            entry.remove("apiKey");
+            bail!("Ollama URL must start with http:// or https://");
         }
+        let mut instances = self.try_ollama_settings()?;
+        if instances
+            .iter()
+            .any(|i| i.id.eq_ignore_ascii_case(&instance.id))
+        {
+            bail!("Ollama instance already exists: {}", instance.id);
+        }
+        instances.push(instance);
+        self.set_ollama_instances(&instances);
+        Ok(())
+    }
+
+    /// Replace the instance with the same id.
+    pub fn update_ollama_instance(&mut self, instance: OllamaInstance) -> Result<()> {
+        let mut instances = self.try_ollama_settings()?;
+        let Some(slot) = instances
+            .iter_mut()
+            .find(|i| i.id.eq_ignore_ascii_case(&instance.id))
+        else {
+            bail!("unknown Ollama instance: {}", instance.id);
+        };
+        *slot = instance;
+        self.set_ollama_instances(&instances);
+        Ok(())
+    }
+
+    /// Remove an instance; returns the removed record.
+    pub fn remove_ollama_instance(&mut self, id: &str) -> Result<OllamaInstance> {
+        let mut instances = self.try_ollama_settings()?;
+        let Some(index) = instances.iter().position(|i| i.id.eq_ignore_ascii_case(id)) else {
+            bail!("unknown Ollama instance: {id}");
+        };
+        let removed = instances.remove(index);
+        self.set_ollama_instances(&instances);
+        Ok(removed)
     }
 }
 
-/// Environment variable consulted when no key is stored for `provider`.
-pub fn env_var_for(provider: &str) -> Option<&'static str> {
-    match provider {
-        "anthropic" => Some("ANTHROPIC_API_KEY"),
-        "openai" => Some("OPENAI_API_KEY"),
-        "openrouter" => Some("OPENROUTER_API_KEY"),
-        _ => None,
-    }
-}
-
-fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
+pub(crate) fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     match fs::read_to_string(path) {
         Ok(text) if text.trim().is_empty() => Ok(Map::new()),
         Ok(text) => match serde_json::from_str::<Value>(&text)
@@ -317,11 +304,14 @@ mod tests {
         )
         .unwrap();
         let mut settings = Settings::load(&home).unwrap();
+        assert_eq!(settings.home(), Some(&home));
         assert_eq!(settings.default_provider().as_deref(), Some("openrouter"));
         let inst = settings.ollama_instances();
         assert_eq!(inst.len(), 1);
         assert_eq!(inst[0].base_url, "http://127.0.0.1:11434");
-        assert_eq!(inst[0].models, vec!["qwen3".to_string()]);
+        assert_eq!(inst[0].models[0].name, "qwen3");
+        assert_eq!(settings.ollama_settings().len(), 2);
+        assert!(settings.image_auto_resize());
         settings.set_default_model("anthropic", "claude-x");
         settings.set_theme("dark");
         settings.save(&home).unwrap();
@@ -339,11 +329,47 @@ mod tests {
             auth.stored_api_key("openrouter").as_deref(),
             Some("sk-test")
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = fs::metadata(home.auth_path()).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
+    }
+
+    #[test]
+    fn ollama_instance_crud_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentHome::new(dir.path());
+        fs::write(
+            home.settings_path(),
+            r#"{"ollama":{"keep":true},"images":{"autoResize":false}}"#,
+        )
+        .unwrap();
+        let mut settings = Settings::load(&home).unwrap();
+        assert!(!settings.image_auto_resize());
+        settings
+            .add_ollama_instance(OllamaInstance::new("gpu", "http://box:11434/v1"))
+            .unwrap();
+        assert_eq!(
+            settings
+                .add_ollama_instance(OllamaInstance::new("GPU", "http://x"))
+                .unwrap_err()
+                .to_string(),
+            "Ollama instance already exists: GPU"
+        );
+        assert!(
+            settings
+                .add_ollama_instance(OllamaInstance::new("bad id", "http://x"))
+                .is_err()
+        );
+        let mut gpu = settings.ollama_settings()[0].clone();
+        crate::ollama::configure_instance(&mut gpu, "name", "Big GPU").unwrap();
+        settings.update_ollama_instance(gpu).unwrap();
+        settings.save(&home).unwrap();
+        let mut settings = Settings::load(&home).unwrap();
+        assert_eq!(settings.raw()["ollama"]["keep"], true);
+        let gpu = &settings.ollama_settings()[0];
+        assert_eq!(
+            (gpu.name.as_str(), gpu.base_url.as_str()),
+            ("Big GPU", "http://box:11434")
+        );
+        assert_eq!(settings.remove_ollama_instance("gpu").unwrap().id, "gpu");
+        assert!(settings.remove_ollama_instance("gpu").is_err());
+        assert!(settings.ollama_settings().is_empty());
     }
 }

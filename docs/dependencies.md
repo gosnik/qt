@@ -22,7 +22,9 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `dirs` | Home directory lookup |
 | `ignore`, `globset`, `regex` | `.gitignore`-aware `grep`/`find`, glob and regex matching |
 | `similar` | Unified diffs for `edit` results |
-| `base64` | Image attachments |
+| `base64` | Image attachments, JWT payloads, PKCE |
+| `image` (png, jpeg, gif, webp, bmp) | Image dimension sniffing, EXIF orientation, resizing and re-encoding to provider limits |
+| `sha2` | SHA-256 for OAuth PKCE code challenges |
 | `rand` | Session entry ids |
 | `libc` (unix) | Killing a bash process group on timeout or abort |
 | `tempfile` (dev) | Test fixtures |

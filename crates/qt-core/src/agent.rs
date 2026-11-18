@@ -252,6 +252,7 @@ async fn stream_response(
         tools: params.tools.specs(),
         max_tokens: params.max_tokens,
         thinking: params.thinking,
+        ..Default::default()
     };
     let request = params
         .hooks
@@ -519,11 +520,18 @@ mod tests {
         AgentParams {
             http: reqwest::Client::new(),
             provider: ProviderConfig {
-                id: "ollama".into(),
+                id: "ollama:local".into(),
                 label: "Ollama".into(),
-                kind: ProviderKind::Ollama,
-                base_url: format!("http://127.0.0.1:{port}"),
-                api_key: None,
+                kind: ProviderKind::OpenAiCompletions,
+                base_url: format!("http://127.0.0.1:{port}/v1"),
+                compat: crate::ollama::compat(),
+                local: true,
+                // Loop tests check one response per request; HTTP retries are tested in provider::http.
+                retry: crate::provider::http::RetryPolicy {
+                    max_retries: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
             },
             model: "mock".into(),
             system: "sys".into(),

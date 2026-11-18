@@ -8,10 +8,14 @@
 //! [`agent::AgentEvent`]s.
 
 pub mod agent;
+pub mod auth;
+pub mod catalog;
 pub mod config;
 pub mod engine;
 pub mod harness;
+pub mod images;
 pub mod message;
+pub mod ollama;
 pub mod prompt;
 pub mod provider;
 pub mod session;

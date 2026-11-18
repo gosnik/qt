@@ -67,10 +67,12 @@ impl ThinkingItem {
             .iter()
             .map(|level| {
                 let title = match level {
-                    ThinkingLevel::Off => "Thinking: default",
+                    ThinkingLevel::Off => "Thinking: off",
+                    ThinkingLevel::Minimal => "Thinking: minimal",
                     ThinkingLevel::Low => "Thinking: low",
                     ThinkingLevel::Medium => "Thinking: medium",
                     ThinkingLevel::High => "Thinking: high",
+                    ThinkingLevel::XHigh => "Thinking: xhigh",
                 };
                 Self {
                     title: title.into(),

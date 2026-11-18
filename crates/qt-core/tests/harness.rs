@@ -128,7 +128,7 @@ fn setup(mock: &Mock, extra: Value) -> Setup {
     std::fs::create_dir_all(home.root()).unwrap();
     let mut settings = json!({
         "ollama": {"instances": [{"id": "local", "baseUrl": format!("http://127.0.0.1:{}", mock.port), "enabled": true}]},
-        "retry": {"baseDelayMs": 1},
+        "retry": {"baseDelayMs": 1, "provider": {"maxRetries": 0}},
     });
     if let (Some(s), Some(e)) = (settings.as_object_mut(), extra.as_object()) {
         for (k, v) in e {
@@ -137,7 +137,7 @@ fn setup(mock: &Mock, extra: Value) -> Setup {
     }
     std::fs::write(home.settings_path(), settings.to_string()).unwrap();
     let engine = Engine::new(home, &workspace).unwrap();
-    let conv = engine.new_conversation(Some(ModelRef::new("ollama", "mock")));
+    let conv = engine.new_conversation(Some(ModelRef::new("ollama:local", "mock")));
     Setup { dir, engine, conv }
 }
 
@@ -551,7 +551,7 @@ fn session_catalog_resolution_import_and_fork() {
     assert_eq!(s.engine.session_dir(), custom);
     let conv = s
         .engine
-        .new_conversation(Some(ModelRef::new("ollama", "mock")));
+        .new_conversation(Some(ModelRef::new("ollama:local", "mock")));
     drain(&s.engine, conv.prompt("hello", vec![]).unwrap());
     assert!(conv.session_path().starts_with(&custom));
     let id = conv.session_id();

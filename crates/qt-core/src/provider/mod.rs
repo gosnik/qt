@@ -1,56 +1,119 @@
 //! Model providers.
 //!
-//! Two wire protocols cover the supported back ends:
-//! - [`anthropic`]: the Anthropic Messages API.
-//! - [`openai`]: OpenAI-compatible chat completions, used for OpenAI,
-//!   OpenRouter and Ollama instances.
+//! Wire APIs (Pi naming):
+//! - `anthropic-messages` ([`anthropic`]): Anthropic Messages, including
+//!   Claude Pro/Max OAuth tokens.
+//! - `openai-completions` ([`openai`]): OpenAI-compatible chat completions
+//!   with the per-host compatibility matrix ([`compat`]).
+//! - `openai-responses`, `openai-codex-responses`, `azure-openai-responses`
+//!   ([`responses`]): the OpenAI Responses API, the ChatGPT (Codex)
+//!   subscription endpoint and Azure OpenAI.
 //!
 //! Every stream call returns a complete [`AssistantMessage`]; transport and
 //! API failures become `stopReason: "error"` messages and cancellation
 //! becomes `stopReason: "aborted"` with whatever content had streamed.
 
 pub mod anthropic;
+pub mod compat;
+pub mod http;
 pub mod models;
 pub mod openai;
+pub mod responses;
+pub mod transform;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AuthStore, Settings};
+use crate::auth::{AuthStore, Credential, OAuthCredentials};
+use crate::catalog::{ModelCatalog, ModelSpec};
+use crate::config::{AgentHome, Settings};
 use crate::message::{AssistantMessage, ContentBlock, Message, StopReason, now_millis};
 
+pub use http::RetryPolicy;
 pub use models::{ModelInfo, list_models};
 
-/// Wire protocol spoken by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Wire protocol spoken to a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ProviderKind {
-    Anthropic,
-    OpenAi,
-    OpenRouter,
-    Ollama,
+    AnthropicMessages,
+    #[default]
+    OpenAiCompletions,
+    OpenAiResponses,
+    OpenAiCodexResponses,
+    AzureOpenAiResponses,
 }
 
 impl ProviderKind {
     /// The `api` string recorded on assistant messages (Pi naming).
     pub fn api_name(self) -> &'static str {
         match self {
-            Self::Anthropic => "anthropic-messages",
-            Self::OpenAi | Self::OpenRouter | Self::Ollama => "openai-completions",
+            Self::AnthropicMessages => "anthropic-messages",
+            Self::OpenAiCompletions => "openai-completions",
+            Self::OpenAiResponses => "openai-responses",
+            Self::OpenAiCodexResponses => "openai-codex-responses",
+            Self::AzureOpenAiResponses => "azure-openai-responses",
         }
+    }
+
+    /// Parse a Pi `api` string; `None` for APIs without a transport.
+    pub fn from_api(api: &str) -> Option<Self> {
+        Some(match api {
+            "anthropic-messages" => Self::AnthropicMessages,
+            "openai-completions" => Self::OpenAiCompletions,
+            "openai-responses" => Self::OpenAiResponses,
+            "openai-codex-responses" => Self::OpenAiCodexResponses,
+            "azure-openai-responses" => Self::AzureOpenAiResponses,
+            _ => return None,
+        })
+    }
+}
+
+/// Stored OAuth credentials backing a provider's access token, refreshed
+/// before use when expired.
+#[derive(Clone, PartialEq)]
+pub struct OAuthBinding {
+    pub credentials: OAuthCredentials,
+    /// `auth.json` to update after a refresh.
+    pub auth_path: Option<PathBuf>,
+}
+
+impl fmt::Debug for OAuthBinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuthBinding")
+            .field("expires", &self.credentials.expires)
+            .field("auth_path", &self.auth_path)
+            .finish()
     }
 }
 
 /// A configured provider endpoint.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// Construct with `..Default::default()` so new fields stay source-compatible.
+#[derive(Clone, PartialEq, Default)]
 pub struct ProviderConfig {
     pub id: String,
     pub label: String,
+    /// Default wire API; a model's own `api` takes precedence.
     pub kind: ProviderKind,
     pub base_url: String,
+    /// API key or OAuth access token.
     pub api_key: Option<String>,
+    pub headers: BTreeMap<String, String>,
+    /// Provider-level compatibility overrides.
+    pub compat: Map<String, Value>,
+    /// Local providers (Ollama) need no credentials.
+    pub local: bool,
+    /// Known models of this provider (catalog, overrides and discovery cache).
+    pub models: Arc<Vec<ModelSpec>>,
+    pub oauth: Option<OAuthBinding>,
+    pub retry: RetryPolicy,
+    /// Also send `Authorization: Bearer <key>` (models.json `authHeader`).
+    pub auth_header: bool,
 }
 
 impl fmt::Debug for ProviderConfig {
@@ -60,6 +123,8 @@ impl fmt::Debug for ProviderConfig {
             .field("kind", &self.kind)
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<set>"))
+            .field("models", &self.models.len())
+            .field("oauth", &self.oauth.is_some())
             .finish()
     }
 }
@@ -67,11 +132,30 @@ impl fmt::Debug for ProviderConfig {
 impl ProviderConfig {
     /// Whether requests can be made (local providers need no key).
     pub fn is_ready(&self) -> bool {
-        self.kind == ProviderKind::Ollama || self.api_key.is_some()
+        self.local || self.api_key.is_some()
     }
 
     pub fn needs_api_key(&self) -> bool {
-        self.kind != ProviderKind::Ollama
+        !self.local
+    }
+
+    /// Whether OpenRouter attribution headers are sent (disabled by
+    /// `telemetryEnabled: false` / `enableInstallTelemetry: false` in settings,
+    /// recorded as compat `attribution: false`).
+    pub fn attribution(&self) -> bool {
+        self.compat.get("attribution").and_then(Value::as_bool) != Some(false)
+    }
+
+    /// The catalog record for `model`, or a permissive fallback.
+    pub fn model_spec(&self, model: &str) -> ModelSpec {
+        let wanted = model.trim().to_lowercase();
+        self.models
+            .iter()
+            .find(|m| m.id.to_lowercase() == wanted)
+            .cloned()
+            .unwrap_or_else(|| {
+                ModelSpec::fallback(&self.id, self.kind.api_name(), &self.base_url, model)
+            })
     }
 }
 
@@ -82,66 +166,171 @@ pub const KEYED_PROVIDERS: [(&str, &str); 3] = [
     ("openrouter", "OpenRouter"),
 ];
 
-/// Build the provider list from settings and credentials.
-pub fn configured_providers(settings: &Settings, auth: &AuthStore) -> Vec<ProviderConfig> {
-    let base_override = |id: &str| {
+/// Providers excluded although their API has a transport: GitHub Copilot
+/// needs its device-flow token exchange, which is out of scope.
+const EXCLUDED_PROVIDERS: &[&str] = &["github-copilot"];
+
+/// Catalog models grouped by lower-cased provider id.
+type ModelsByProvider = HashMap<String, Arc<Vec<ModelSpec>>>;
+
+struct CatalogCache {
+    key: String,
+    catalog: Arc<ModelCatalog>,
+    by_provider: ModelsByProvider,
+    error: Option<String>,
+}
+
+fn file_stamp(path: &std::path::Path) -> String {
+    std::fs::metadata(path)
+        .map(|m| format!("{:?}:{}", m.modified().ok(), m.len()))
+        .unwrap_or_default()
+}
+
+fn cached_catalog(
+    home: &AgentHome,
+    settings: &Settings,
+) -> (Arc<ModelCatalog>, ModelsByProvider, Option<String>) {
+    static CACHE: Mutex<Option<CatalogCache>> = Mutex::new(None);
+    let key = format!(
+        "{}|{}|{}|{}|{}",
+        home.root().display(),
+        file_stamp(&home.models_path()),
+        file_stamp(&home.openrouter_cache_path()),
         settings
             .raw()
             .get("providers")
-            .and_then(|p| p.get(id))
-            .and_then(|p| p.get("baseUrl"))
-            .and_then(Value::as_str)
-            .map(|s| s.trim_end_matches('/').to_string())
-    };
-    let mut providers = vec![
-        ProviderConfig {
-            id: "anthropic".into(),
-            label: "Anthropic".into(),
-            kind: ProviderKind::Anthropic,
-            base_url: base_override("anthropic")
-                .unwrap_or_else(|| "https://api.anthropic.com".into()),
-            api_key: auth.api_key("anthropic"),
-        },
-        ProviderConfig {
-            id: "openai".into(),
-            label: "OpenAI".into(),
-            kind: ProviderKind::OpenAi,
-            base_url: base_override("openai").unwrap_or_else(|| "https://api.openai.com/v1".into()),
-            api_key: auth.api_key("openai"),
-        },
-        ProviderConfig {
-            id: "openrouter".into(),
-            label: "OpenRouter".into(),
-            kind: ProviderKind::OpenRouter,
-            base_url: base_override("openrouter")
-                .unwrap_or_else(|| "https://openrouter.ai/api/v1".into()),
-            api_key: auth.api_key("openrouter"),
-        },
-    ];
-    let mut instances = settings.ollama_instances();
-    if instances.is_empty() {
-        instances.push(crate::config::OllamaInstance {
-            id: "local".into(),
-            base_url: "http://127.0.0.1:11434".into(),
-            models: Vec::new(),
-        });
+            .map(Value::to_string)
+            .unwrap_or_default(),
+        settings
+            .raw()
+            .get("ollama")
+            .map(Value::to_string)
+            .unwrap_or_default(),
+    );
+    let mut guard = CACHE.lock().expect("catalog cache lock");
+    if let Some(hit) = guard.as_ref().filter(|c| c.key == key) {
+        return (
+            hit.catalog.clone(),
+            hit.by_provider.clone(),
+            hit.error.clone(),
+        );
     }
-    for (i, inst) in instances.iter().enumerate() {
-        let id = if i == 0 {
-            "ollama".to_string()
-        } else {
-            format!("ollama:{}", inst.id)
+    let (catalog, error) = ModelCatalog::load(home, settings);
+    let mut grouped: HashMap<String, Vec<ModelSpec>> = HashMap::new();
+    for model in &catalog.models {
+        grouped
+            .entry(model.provider.to_lowercase())
+            .or_default()
+            .push(model.clone());
+    }
+    let by_provider: ModelsByProvider =
+        grouped.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
+    let catalog = Arc::new(catalog);
+    *guard = Some(CatalogCache {
+        key,
+        catalog: catalog.clone(),
+        by_provider: by_provider.clone(),
+        error: error.clone(),
+    });
+    (catalog, by_provider, error)
+}
+
+/// The model catalog for `settings` (agent home taken from where the
+/// settings were loaded), plus any `models.json` error.
+pub fn model_catalog(settings: &Settings) -> (Arc<ModelCatalog>, Option<String>) {
+    let home = settings.home().cloned().unwrap_or_else(AgentHome::from_env);
+    let (catalog, _, error) = cached_catalog(&home, settings);
+    (catalog, error)
+}
+
+/// Build the provider list from settings, credentials and the catalog.
+///
+/// Providers whose API has no transport (Google, Bedrock, Mistral, ...) or
+/// that the catalog marks unsupported are omitted. Ollama instances appear as
+/// `ollama:<id>`; when none are configured a local instance at
+/// `http://127.0.0.1:11434` is offered as `ollama:local`.
+pub fn configured_providers(settings: &Settings, auth: &AuthStore) -> Vec<ProviderConfig> {
+    let home = settings.home().cloned().unwrap_or_else(AgentHome::from_env);
+    let (catalog, by_provider, _) = cached_catalog(&home, settings);
+    let retry = RetryPolicy::from_settings(settings);
+    let auth_path = auth.path().map(PathBuf::from);
+    let telemetry = ["telemetryEnabled", "enableInstallTelemetry"]
+        .iter()
+        .all(|k| settings.raw().get(*k).and_then(Value::as_bool) != Some(false));
+    let mut providers = Vec::new();
+    for spec in &catalog.providers {
+        if spec.unsupported.is_some()
+            || EXCLUDED_PROVIDERS.contains(&spec.id.as_str())
+            || crate::ollama::is_ollama_provider_id(&spec.id)
+        {
+            continue;
+        }
+        let Some(kind) = ProviderKind::from_api(&spec.api) else {
+            continue;
         };
+        let mut config = ProviderConfig {
+            id: spec.id.clone(),
+            label: spec.name.clone(),
+            kind,
+            base_url: spec.base_url.trim_end_matches('/').to_string(),
+            headers: spec.headers.clone(),
+            compat: spec.compat.clone(),
+            local: !spec.requires_auth,
+            models: by_provider
+                .get(&spec.id.to_lowercase())
+                .cloned()
+                .unwrap_or_default(),
+            retry,
+            auth_header: spec.auth_header,
+            ..ProviderConfig::default()
+        };
+        if !telemetry {
+            config
+                .compat
+                .insert("attribution".into(), Value::Bool(false));
+        }
+        match auth.credential(&spec.id) {
+            Some(Credential::OAuth(creds)) => {
+                config.api_key = Some(creds.access.clone());
+                config.oauth = Some(OAuthBinding {
+                    credentials: creds,
+                    auth_path: auth_path.clone(),
+                });
+            }
+            Some(Credential::ApiKey(key)) => config.api_key = Some(key),
+            None => {
+                config.api_key = crate::auth::env_api_key(&spec.id).or_else(|| {
+                    spec.api_key
+                        .as_deref()
+                        .and_then(crate::catalog::resolve_config_value)
+                })
+            }
+        }
+        providers.push(config);
+    }
+    let mut instances = settings.ollama_settings();
+    if instances.is_empty() {
+        instances.push(crate::ollama::OllamaInstance::local_default());
+    }
+    for instance in instances.iter().filter(|i| i.enabled) {
+        let id = crate::ollama::provider_id(&instance.id);
         providers.push(ProviderConfig {
-            label: if i == 0 {
-                "Ollama".into()
-            } else {
-                format!("Ollama ({})", inst.id)
+            label: instance.label(),
+            kind: ProviderKind::OpenAiCompletions,
+            base_url: format!("{}/v1", instance.base_url),
+            api_key: instance.api_key.clone(),
+            compat: crate::ollama::compat(),
+            local: true,
+            models: by_provider
+                .get(&id.to_lowercase())
+                .cloned()
+                .unwrap_or_default(),
+            retry: RetryPolicy {
+                timeout_ms: instance.timeout_ms,
+                ..retry
             },
             id,
-            kind: ProviderKind::Ollama,
-            base_url: inst.base_url.clone(),
-            api_key: None,
+            ..ProviderConfig::default()
         });
     }
     providers
@@ -175,41 +364,77 @@ impl fmt::Display for ModelRef {
     }
 }
 
-/// Reasoning effort requested from models that support it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Reasoning effort requested from models that support it (Pi levels).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub enum ThinkingLevel {
-    /// Leave the provider default in place.
+    /// No reasoning (the model's `off` mapping, where it has one).
     #[default]
     Off,
+    Minimal,
     Low,
     Medium,
     High,
+    XHigh,
 }
 
 impl ThinkingLevel {
-    pub const ALL: [ThinkingLevel; 4] = [Self::Off, Self::Low, Self::Medium, Self::High];
+    pub const ALL: [ThinkingLevel; 6] = [
+        Self::Off,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::XHigh,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
+            Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().to_ascii_lowercase();
         Self::ALL.into_iter().find(|l| l.as_str() == s)
     }
 
-    /// Anthropic extended-thinking budget.
+    /// Default token budget for budget-based thinking (Pi
+    /// `adjustMaxTokensForThinking`; `xhigh` uses the `high` budget).
     pub fn budget_tokens(self) -> Option<u32> {
         match self {
             Self::Off => None,
-            Self::Low => Some(4_096),
-            Self::Medium => Some(12_288),
-            Self::High => Some(28_672),
+            Self::Minimal => Some(1_024),
+            Self::Low => Some(2_048),
+            Self::Medium => Some(8_192),
+            Self::High | Self::XHigh => Some(16_384),
         }
+    }
+}
+
+/// Prompt-cache retention preference (Pi `cacheRetention`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CacheRetention {
+    None,
+    #[default]
+    Short,
+    Long,
+}
+
+impl CacheRetention {
+    /// The request's preference, else `PI_CACHE_RETENTION=long`, else short.
+    pub fn resolve(requested: Option<CacheRetention>) -> CacheRetention {
+        requested.unwrap_or_else(|| {
+            if std::env::var("PI_CACHE_RETENTION").as_deref() == Ok("long") {
+                CacheRetention::Long
+            } else {
+                CacheRetention::Short
+            }
+        })
     }
 }
 
@@ -230,8 +455,23 @@ pub struct Request {
     pub system: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
+    /// Output token budget; 0 uses `min(model maxTokens, 32000)`.
     pub max_tokens: u32,
     pub thinking: ThinkingLevel,
+    /// Session id for prompt caching and session-affinity headers.
+    pub session_id: Option<String>,
+    pub cache_retention: Option<CacheRetention>,
+    pub temperature: Option<f64>,
+    /// OpenAI `service_tier` (`flex`, `priority`, ...).
+    pub service_tier: Option<String>,
+    /// Responses `reasoning.summary` (default `auto`).
+    pub reasoning_summary: Option<String>,
+    /// Codex `text.verbosity` (default `low`).
+    pub text_verbosity: Option<String>,
+    /// Extra request headers, applied last.
+    pub headers: BTreeMap<String, String>,
+    /// Model metadata to use instead of the provider's catalog entry.
+    pub model_spec: Option<ModelSpec>,
 }
 
 /// Incremental updates while an assistant message streams.
@@ -257,6 +497,35 @@ pub enum StreamEvent {
     },
 }
 
+/// The model record a request runs against.
+pub fn resolve_model(provider: &ProviderConfig, request: &Request) -> ModelSpec {
+    request
+        .model_spec
+        .clone()
+        .unwrap_or_else(|| provider.model_spec(&request.model))
+}
+
+/// The level sent to the provider: `off` stays off (Pi passes no reasoning
+/// option), anything else is clamped to what the model supports.
+pub(crate) fn request_level(model: &ModelSpec, level: ThinkingLevel) -> ThinkingLevel {
+    if level == ThinkingLevel::Off || !model.reasoning {
+        ThinkingLevel::Off
+    } else {
+        model.clamp_thinking(level)
+    }
+}
+
+/// Output budget: the request's (bounded by the model) or Pi's default.
+pub(crate) fn effective_max_tokens(request: &Request, model: &ModelSpec) -> u32 {
+    let model_max = u32::try_from(model.max_tokens).unwrap_or(u32::MAX);
+    match (request.max_tokens, model_max) {
+        (0, 0) => 16_384,
+        (0, m) => m.min(32_000),
+        (r, 0) => r,
+        (r, m) => r.min(m),
+    }
+}
+
 /// Stream one assistant response.
 pub async fn stream(
     http: &reqwest::Client,
@@ -265,13 +534,72 @@ pub async fn stream(
     cancel: &CancellationToken,
     on_event: &mut (dyn FnMut(StreamEvent) + Send),
 ) -> AssistantMessage {
+    let model = resolve_model(provider, request);
+    let kind = ProviderKind::from_api(&model.api).unwrap_or(provider.kind);
     let mut partial = PartialMessage::new(provider, &request.model);
-    let result = match provider.kind {
-        ProviderKind::Anthropic => {
-            anthropic::stream(http, provider, request, cancel, &mut partial, on_event).await
-        }
-        _ => openai::stream(http, provider, request, cancel, &mut partial, on_event).await,
+    partial.message.api = if ProviderKind::from_api(&model.api).is_some() || model.api.is_empty() {
+        kind.api_name().to_string()
+    } else {
+        model.api.clone()
     };
+    let result = async {
+        if ProviderKind::from_api(&model.api).is_none() && !model.api.is_empty() {
+            anyhow::bail!(
+                "The {} API used by {}/{} is not supported by qt",
+                model.api,
+                provider.id,
+                model.id
+            );
+        }
+        let mut provider = provider.clone();
+        if let Some(binding) = &provider.oauth {
+            let access = crate::auth::fresh_access_token(http, &provider.id, binding).await?;
+            provider.api_key = Some(access);
+        }
+        match kind {
+            ProviderKind::AnthropicMessages => {
+                anthropic::stream(
+                    http,
+                    &provider,
+                    &model,
+                    request,
+                    cancel,
+                    &mut partial,
+                    on_event,
+                )
+                .await
+            }
+            ProviderKind::OpenAiCompletions => {
+                openai::stream(
+                    http,
+                    &provider,
+                    &model,
+                    request,
+                    cancel,
+                    &mut partial,
+                    on_event,
+                )
+                .await
+            }
+            ProviderKind::OpenAiResponses
+            | ProviderKind::OpenAiCodexResponses
+            | ProviderKind::AzureOpenAiResponses => {
+                responses::stream(
+                    http,
+                    &provider,
+                    &model,
+                    kind,
+                    request,
+                    cancel,
+                    &mut partial,
+                    on_event,
+                )
+                .await
+            }
+        }
+    }
+    .await;
+    partial.apply_cost(&model);
     match result {
         Ok(()) if cancel.is_cancelled() => partial.finish_aborted(),
         Ok(()) => partial.finish(),
@@ -287,6 +615,12 @@ pub struct PartialMessage {
     /// Raw JSON argument text per content index.
     tool_args: Vec<(usize, String)>,
     stop: Option<StopReason>,
+    /// Error reported in-band (for example `finish_reason: content_filter`).
+    stop_error: Option<String>,
+    /// Cost reported by the provider (OpenRouter), used when the model has no prices.
+    pub(crate) reported_cost: Option<f64>,
+    /// Price multiplier from the effective service tier.
+    pub(crate) cost_multiplier: f64,
 }
 
 impl PartialMessage {
@@ -300,6 +634,9 @@ impl PartialMessage {
             },
             tool_args: Vec::new(),
             stop: None,
+            stop_error: None,
+            reported_cost: None,
+            cost_multiplier: 1.0,
         }
     }
 
@@ -375,8 +712,44 @@ impl PartialMessage {
         }
     }
 
+    /// Raw arguments streamed so far for the tool call at `index`.
+    pub fn tool_args(&self, index: usize) -> Option<&str> {
+        self.tool_args
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, a)| a.as_str())
+    }
+
+    /// Replace the raw arguments of the tool call at `index`.
+    pub fn set_tool_args(&mut self, index: usize, raw: &str) {
+        if let Some((_, args)) = self.tool_args.iter_mut().find(|(i, _)| *i == index) {
+            *args = raw.to_string();
+        }
+    }
+
     pub fn set_stop(&mut self, stop: StopReason) {
         self.stop = Some(stop);
+    }
+
+    /// Mark the response as failed with `message` once streaming ends.
+    pub fn set_stop_error(&mut self, message: String) {
+        self.stop = Some(StopReason::Error);
+        self.stop_error = Some(message);
+    }
+
+    fn apply_cost(&mut self, model: &ModelSpec) {
+        let usage = &mut self.message.usage;
+        if usage.total_tokens == 0 {
+            usage.total_tokens = usage.input_tokens
+                + usage.output_tokens
+                + usage.cache_read_tokens
+                + usage.cache_write_tokens;
+        }
+        usage.total_cost_usd = if !model.cost.is_zero() {
+            model.cost.compute(usage) * self.cost_multiplier
+        } else {
+            self.reported_cost.unwrap_or(0.0)
+        };
     }
 
     fn finalize_tool_args(&mut self) {
@@ -391,12 +764,21 @@ impl PartialMessage {
 
     pub fn finish(mut self) -> AssistantMessage {
         self.finalize_tool_args();
+        if let Some(error) = self.stop_error.take() {
+            self.message.stop_reason = StopReason::Error;
+            self.message.error_message = Some(error);
+            self.message.timestamp = Some(now_millis());
+            return self.message;
+        }
         let has_calls = self.message.tool_calls().next().is_some();
         self.message.stop_reason = match self.stop {
             Some(StopReason::Stop) | None if has_calls => StopReason::ToolCall,
             Some(stop) => stop,
             None => StopReason::Stop,
         };
+        if self.message.stop_reason == StopReason::Error && self.message.error_message.is_none() {
+            self.message.error_message = Some("An unknown error occurred".into());
+        }
         self.message.timestamp = Some(now_millis());
         self.message
     }
@@ -404,6 +786,7 @@ impl PartialMessage {
     pub fn finish_aborted(mut self) -> AssistantMessage {
         self.finalize_tool_args();
         self.message.stop_reason = StopReason::Aborted;
+        self.message.error_message = Some("Request was aborted".into());
         self.message.timestamp = Some(now_millis());
         self.message
     }
@@ -479,23 +862,62 @@ pub fn sanitize_history(messages: &[Message]) -> Vec<Message> {
 
 /// Read an error body from a failed HTTP response into a short message.
 pub(crate) async fn http_error(response: reqwest::Response) -> anyhow::Error {
-    let status = response.status();
+    let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
-    let detail = serde_json::from_str::<Value>(&body)
-        .ok()
-        .and_then(|v| {
-            v.get("error")
-                .and_then(|e| {
-                    e.get("message")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| e.as_str().map(str::to_string))
-                })
-                .or_else(|| v.get("message").and_then(Value::as_str).map(str::to_string))
-        })
-        .unwrap_or_else(|| crate::util::shorten(body.trim(), 500));
-    anyhow::anyhow!("HTTP {status}: {detail}")
+    anyhow::anyhow!(http::HttpFailure { status, body }.message())
 }
+
+/// Replace characters that cannot be sent as JSON text: lone surrogates
+/// cannot occur in Rust strings, but NUL and other C0 controls except tab,
+/// newline and carriage return are stripped as Pi's `sanitizeSurrogates` +
+/// provider-safe text handling do.
+pub(crate) fn sanitize_text(text: &str) -> String {
+    if !text
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return text.to_string();
+    }
+    text.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
+        .collect()
+}
+
+/// Substitute `{VAR}` placeholders in a base URL from the environment.
+pub(crate) fn resolve_url_placeholders(url: &str, provider: &str) -> anyhow::Result<String> {
+    let mut out = String::with_capacity(url.len());
+    let mut rest = url;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
+            return Ok(out);
+        };
+        let name = &after[..close];
+        match std::env::var(name).ok().filter(|v| !v.is_empty()) {
+            Some(value) => out.push_str(&value),
+            None => anyhow::bail!("{name} is required for provider {provider} but is not set."),
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Apply headers to a request builder.
+pub(crate) fn with_headers(
+    mut builder: reqwest::RequestBuilder,
+    headers: &BTreeMap<String, String>,
+) -> reqwest::RequestBuilder {
+    for (k, v) in headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    builder
+}
+
+#[cfg(test)]
+pub(crate) mod test_server;
 
 #[cfg(test)]
 mod tests {
@@ -508,6 +930,19 @@ mod tests {
         assert_eq!(r.provider, "openrouter");
         assert_eq!(r.id, "~deepseek/deepseek-flash-latest");
         assert!(ModelRef::parse("nomodel").is_none());
+    }
+
+    #[test]
+    fn thinking_levels_parse_and_budget() {
+        assert_eq!(ThinkingLevel::parse("XHigh"), Some(ThinkingLevel::XHigh));
+        assert_eq!(
+            ThinkingLevel::parse("minimal"),
+            Some(ThinkingLevel::Minimal)
+        );
+        assert_eq!(ThinkingLevel::parse("max"), None);
+        assert_eq!(ThinkingLevel::Minimal.budget_tokens(), Some(1_024));
+        assert_eq!(ThinkingLevel::XHigh.budget_tokens(), Some(16_384));
+        assert_eq!(ThinkingLevel::Off.budget_tokens(), None);
     }
 
     #[test]
@@ -552,10 +987,7 @@ mod tests {
     fn finish_infers_tool_call_stop() {
         let cfg = ProviderConfig {
             id: "x".into(),
-            label: "x".into(),
-            kind: ProviderKind::OpenAi,
-            base_url: String::new(),
-            api_key: None,
+            ..Default::default()
         };
         let mut p = PartialMessage::new(&cfg, "m");
         let mut sink = |_e: StreamEvent| {};
@@ -573,5 +1005,69 @@ mod tests {
         assert_eq!(m.stop_reason, StopReason::ToolCall);
         let (_, _, args) = m.tool_calls().next().unwrap();
         assert_eq!(args["path"], "a");
+    }
+
+    #[test]
+    fn max_tokens_follow_model_limits() {
+        let mut model = ModelSpec::fallback("p", "openai-completions", "", "m");
+        model.max_tokens = 128_000;
+        let mut request = Request::default();
+        assert_eq!(effective_max_tokens(&request, &model), 32_000);
+        request.max_tokens = 200_000;
+        assert_eq!(effective_max_tokens(&request, &model), 128_000);
+        request.max_tokens = 1_000;
+        assert_eq!(effective_max_tokens(&request, &model), 1_000);
+    }
+
+    #[test]
+    fn url_placeholders_resolve_from_env() {
+        assert_eq!(
+            resolve_url_placeholders("https://x/{PATH}/y", "p").unwrap(),
+            format!("https://x/{}/y", std::env::var("PATH").unwrap())
+        );
+        let err = resolve_url_placeholders("https://x/{QT_TEST_UNSET_VAR_123}", "cf")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "QT_TEST_UNSET_VAR_123 is required for provider cf but is not set."
+        );
+    }
+
+    #[test]
+    fn providers_come_from_catalog_and_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentHome::new(dir.path());
+        std::fs::write(
+            home.settings_path(),
+            r#"{"ollama":{"instances":[{"id":"gpu","name":"GPU box","baseUrl":"http://10.0.0.2:11434/v1/"}]},
+                "retry":{"provider":{"maxRetries":5}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            home.auth_path(),
+            r#"{"version":1,"providers":{"zai":{"apiKey":"zk"},
+                "openai-codex":{"token":"tok","metadata":{"type":"oauth","access":"tok","refresh":"r","expires":1,"accountId":"acc"}}}}"#,
+        )
+        .unwrap();
+        let settings = Settings::load(&home).unwrap();
+        let auth = AuthStore::load(&home).unwrap();
+        let providers = configured_providers(&settings, &auth);
+        let get = |id: &str| providers.iter().find(|p| p.id == id).cloned();
+        let zai = get("zai").unwrap();
+        assert!(zai.is_ready());
+        assert_eq!(zai.retry.max_retries, 5);
+        assert!(zai.models.iter().any(|m| m.id == "glm-4.5-air"));
+        let codex = get("openai-codex").unwrap();
+        assert_eq!(codex.kind, ProviderKind::OpenAiCodexResponses);
+        assert_eq!(codex.oauth.as_ref().unwrap().credentials.refresh, "r");
+        let ollama = get("ollama:gpu").unwrap();
+        assert_eq!(ollama.base_url, "http://10.0.0.2:11434/v1");
+        assert_eq!(ollama.label, "Ollama · GPU box");
+        assert!(ollama.is_ready() && !ollama.needs_api_key());
+        assert!(get("google").is_none());
+        assert!(get("github-copilot").is_none());
+        assert!(get("xai").is_none());
+        assert!(get("azure-openai-responses").is_some());
     }
 }
