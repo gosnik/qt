@@ -9,11 +9,13 @@
 //! bound as `this` keeps state across invocations. Every invocation has an
 //! operation budget (100 000 by default), sources are limited to 256 KB,
 //! `import` and `eval` are disabled, and entering a runtime that another
-//! thread is executing is rejected.
+//! thread is executing is rejected unless that thread is waiting in
+//! [`pump_while`] (as `ctx.compact` does), in which case the call runs on the
+//! owning thread.
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::ThreadId;
 
 use rhai::{
@@ -509,8 +511,71 @@ fn has_import(source: &str) -> Option<usize> {
     })
 }
 
+/// Work handed to a thread that is waiting in [`pump_while`].
+type Job = Box<dyn FnOnce() + Send>;
+
+enum Pumped {
+    Job(Job),
+    Done,
+}
+
+/// A thread's mailbox for invocations of runtimes it owns, open while the
+/// thread waits in [`pump_while`].
+#[derive(Default)]
+struct Pump {
+    tx: Mutex<Option<mpsc::Sender<Pumped>>>,
+}
+
+impl Pump {
+    /// Queue `job` on the owning thread; `false` when it is not pumping.
+    /// The send happens under the lock so nothing is queued after
+    /// [`pump_while`] closed the mailbox and drained it.
+    fn send(&self, job: Job) -> bool {
+        let slot = self.tx.lock().expect("pump lock");
+        slot.as_ref()
+            .is_some_and(|tx| tx.send(Pumped::Job(job)).is_ok())
+    }
+}
+
 thread_local! {
     static DEPTH: Cell<u32> = const { Cell::new(0) };
+    static PUMP: Arc<Pump> = Arc::default();
+}
+
+/// Run the blocking `wait` on a helper thread while this thread runs the
+/// invocations other threads make of runtimes it owns (archived hosts ran
+/// compaction hooks on the thread that called `ctx.compact`). Host APIs
+/// that wait on the engine use this so the hooks they trigger in the
+/// calling extension do not fail as reentrant or deadlock.
+pub fn pump_while<T: Send>(wait: impl FnOnce() -> T + Send) -> T {
+    struct Finish(mpsc::Sender<Pumped>);
+    impl Drop for Finish {
+        fn drop(&mut self) {
+            let _ = self.0.send(Pumped::Done);
+        }
+    }
+    let pump = PUMP.with(Arc::clone);
+    let (tx, rx) = mpsc::channel();
+    let previous = pump.tx.lock().expect("pump lock").replace(tx.clone());
+    let outcome = std::thread::scope(|scope| {
+        let finish = Finish(tx);
+        let waiter = scope.spawn(move || {
+            let _finish = finish;
+            wait()
+        });
+        while let Ok(Pumped::Job(job)) = rx.recv() {
+            job();
+        }
+        waiter.join()
+    });
+    // Close the mailbox, then run whatever was queued before it closed.
+    *pump.tx.lock().expect("pump lock") = previous;
+    while let Ok(message) = rx.try_recv() {
+        if let Pumped::Job(job) = message {
+            job();
+        }
+    }
+    outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 struct Entry<'a> {
@@ -521,9 +586,9 @@ impl Drop for Entry<'_> {
     fn drop(&mut self) {
         self.runtime.shared.hosts.lock().expect("host stack").pop();
         let mut owner = self.runtime.owner.lock().expect("owner lock");
-        if let Some((_, depth)) = owner.as_mut() {
-            *depth -= 1;
-            if *depth == 0 {
+        if let Some(o) = owner.as_mut() {
+            o.depth -= 1;
+            if o.depth == 0 {
                 *owner = None;
             }
         }
@@ -540,8 +605,24 @@ pub struct ScriptRuntime {
     functions: HashMap<String, Vec<usize>>,
     registration: Registration,
     shared: Arc<Shared>,
-    owner: Mutex<Option<(ThreadId, u32)>>,
+    owner: Mutex<Option<Owner>>,
 }
+
+/// The thread executing a runtime, its nesting depth and its mailbox.
+struct Owner {
+    thread: ThreadId,
+    depth: u32,
+    pump: Arc<Pump>,
+}
+
+/// Why a runtime could not be entered.
+enum Refused {
+    /// Another thread owns it; it may be pumping.
+    Busy(Arc<Pump>),
+    Other(String),
+}
+
+const REENTRANT: &str = "extension runtime invocation is reentrant";
 
 impl std::fmt::Debug for ScriptRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -644,17 +725,25 @@ impl ScriptRuntime {
         handler_name("command_", name)
     }
 
-    fn enter(&self, host: HostCall) -> Result<Entry<'_>, String> {
+    fn enter(&self, host: HostCall) -> Result<Entry<'_>, Refused> {
         if DEPTH.with(Cell::get) >= MAX_INVOKE_DEPTH {
-            return Err("extension runtime invocation depth exceeded".into());
+            return Err(Refused::Other(
+                "extension runtime invocation depth exceeded".into(),
+            ));
         }
         let me = std::thread::current().id();
         {
             let mut owner = self.owner.lock().expect("owner lock");
             match owner.as_mut() {
-                Some((id, depth)) if *id == me => *depth += 1,
-                Some(_) => return Err("extension runtime invocation is reentrant".into()),
-                None => *owner = Some((me, 1)),
+                Some(o) if o.thread == me => o.depth += 1,
+                Some(o) => return Err(Refused::Busy(o.pump.clone())),
+                None => {
+                    *owner = Some(Owner {
+                        thread: me,
+                        depth: 1,
+                        pump: PUMP.with(Arc::clone),
+                    })
+                }
             }
         }
         DEPTH.with(|d| d.set(d.get() + 1));
@@ -662,9 +751,31 @@ impl ScriptRuntime {
         Ok(Entry { runtime: self })
     }
 
+    /// Run the invocation on the thread that owns the runtime when it waits
+    /// in [`pump_while`]; otherwise it is rejected as reentrant.
+    fn forward(
+        self: &Arc<Self>,
+        pump: &Pump,
+        handler: &str,
+        arguments: &Value,
+        host: HostCall,
+    ) -> Result<Value, String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let runtime = self.clone();
+        let handler = handler.to_string();
+        let arguments = arguments.clone();
+        let job: Job = Box::new(move || {
+            let _ = reply_tx.send(runtime.invoke(&handler, &arguments, host));
+        });
+        if !pump.send(job) {
+            return Err(REENTRANT.into());
+        }
+        reply_rx.recv().unwrap_or_else(|_| Err(REENTRANT.into()))
+    }
+
     /// Call `handler` with `arguments`; host APIs go to `host`.
     pub fn invoke(
-        &self,
+        self: &Arc<Self>,
         handler: &str,
         arguments: &Value,
         host: HostCall,
@@ -677,7 +788,11 @@ impl ScriptRuntime {
         if !with_arg && !arities.contains(&0) {
             return Err(format!("extension handler was not found: {handler}"));
         }
-        let _entry = self.enter(host)?;
+        let _entry = match self.enter(host.clone()) {
+            Ok(entry) => entry,
+            Err(Refused::Busy(pump)) => return self.forward(&pump, handler, arguments, host),
+            Err(Refused::Other(e)) => return Err(e),
+        };
         let mut this = self.state.clone();
         let mut scope = Scope::new();
         let options = CallFnOptions::new()
@@ -724,8 +839,8 @@ mod tests {
         })
     }
 
-    fn load(source: &str) -> Result<ScriptRuntime, String> {
-        ScriptRuntime::load("test", source, SandboxPolicy::default())
+    fn load(source: &str) -> Result<Arc<ScriptRuntime>, String> {
+        ScriptRuntime::load("test", source, SandboxPolicy::default()).map(Arc::new)
     }
 
     #[test]
@@ -890,17 +1005,15 @@ mod tests {
 
     #[test]
     fn nested_invocation_on_one_thread_and_rejection_across_threads() {
-        let rt = Arc::new(
-            load(
-                r#"
+        let rt = load(
+            r#"
                 fn activate() { this.renders = 0; }
                 fn outer() { ctx::ui::custom(#{ handler: "inner" }) }
                 fn inner(e) { this.renders += 1; #{ lines: ["x"], depth: e.depth } }
                 fn deep() { ctx::ui::custom(#{ handler: "deep" }) }
                 "#,
-            )
-            .unwrap(),
-        );
+        )
+        .unwrap();
         let weak = Arc::downgrade(&rt);
         let nested: HostCall = Arc::new(move |method: &str, args: Value| {
             assert_eq!(method, "ctx.ui.custom");
@@ -930,7 +1043,7 @@ mod tests {
         );
 
         // Another thread entering while this one runs is rejected.
-        let rt2 = Arc::new(load("fn activate() {} fn wait() { host_call(\"block\") }").unwrap());
+        let rt2 = load("fn activate() {} fn wait() { host_call(\"block\") }").unwrap();
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         let rx = Mutex::new(rx);
@@ -950,5 +1063,60 @@ mod tests {
         );
         tx.send(()).unwrap();
         assert_eq!(worker.join().unwrap().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn calls_from_other_threads_run_on_a_pumping_owner() {
+        // A command waits in a host call (like ctx.compact) while the engine
+        // fires a hook of the same extension from another thread.
+        let rt = load(
+            r#"
+            fn activate() { this.log = []; }
+            fn command_squash() {
+                this.log.push("start");
+                let hook = ctx::compact(#{});
+                this.log.push("end");
+                hook
+            }
+            fn on_before(e) { this.log.push("hook " + e.n); #{ seen: e.n } }
+            "#,
+        )
+        .unwrap();
+        let owner = std::thread::current().id();
+        let weak = Arc::downgrade(&rt);
+        let compacting: HostCall = Arc::new(move |method: &str, _: Value| {
+            assert_eq!(method, "ctx.compact");
+            let rt = weak.upgrade().unwrap();
+            pump_while(move || {
+                std::thread::spawn(move || {
+                    let hook_thread: HostCall = Arc::new(move |_: &str, _: Value| {
+                        assert_eq!(std::thread::current().id(), owner);
+                        Ok(Value::Null)
+                    });
+                    rt.invoke("on_before", &json!({"n": 7}), hook_thread)
+                })
+                .join()
+                .unwrap()
+            })
+        });
+        assert_eq!(
+            rt.invoke("command_squash", &Value::Null, compacting)
+                .unwrap(),
+            json!({"seen": 7})
+        );
+        assert_eq!(rt.state()["log"], json!(["start", "hook 7", "end"]));
+
+        // Without a pumping owner the call is still rejected.
+        let rt2 = rt.clone();
+        let busy: HostCall = Arc::new(move |_: &str, _: Value| {
+            let rt2 = rt2.clone();
+            std::thread::spawn(move || rt2.invoke("on_before", &json!({"n": 1}), host()))
+                .join()
+                .unwrap()
+        });
+        assert_eq!(
+            rt.invoke("command_squash", &Value::Null, busy).unwrap_err(),
+            "extension runtime invocation is reentrant"
+        );
     }
 }

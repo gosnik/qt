@@ -456,24 +456,28 @@ impl ExtensionHost for ConversationHost {
             .conversation
             .compact(custom_instructions)
             .map_err(|e| e.to_string())?;
-        let mut outcome: Option<Result<CompactionResult, String>> = None;
-        while let Ok(event) = rx.recv_blocking() {
-            if let AgentEvent::CompactionEnd {
-                result,
-                aborted,
-                error,
-                ..
-            } = event
-            {
-                outcome = Some(match (result, error) {
-                    (Some(r), _) => Ok(r),
-                    (None, Some(e)) => Err(e),
-                    (None, None) if aborted => Err("Compaction aborted".into()),
-                    (None, None) => Err("Compaction did not produce a result".into()),
-                });
+        // Compaction hooks (`session_before_compact`, `session_compact`, ...)
+        // of the calling extension run on this thread while it waits.
+        crate::script::pump_while(move || {
+            let mut outcome: Option<Result<CompactionResult, String>> = None;
+            while let Ok(event) = rx.recv_blocking() {
+                if let AgentEvent::CompactionEnd {
+                    result,
+                    aborted,
+                    error,
+                    ..
+                } = event
+                {
+                    outcome = Some(match (result, error) {
+                        (Some(r), _) => Ok(r),
+                        (None, Some(e)) => Err(e),
+                        (None, None) if aborted => Err("Compaction aborted".into()),
+                        (None, None) => Err("Compaction did not produce a result".into()),
+                    });
+                }
             }
-        }
-        outcome.unwrap_or_else(|| Err("Compaction did not produce a result".into()))
+            outcome.unwrap_or_else(|| Err("Compaction did not produce a result".into()))
+        })
     }
 
     fn is_idle(&self) -> bool {
