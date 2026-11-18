@@ -28,5 +28,5 @@
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets` (no warnings)
 - `cargo test --workspace`
-- For UI changes, run the app (`cargo run -p qt-app`) and check the affected view. Never inject synthetic input into the user's live desktop session; use an isolated display (for example `Xvfb :99`) for scripted UI checks.
+- For UI changes, run the app (`cargo run -p qt-app`) and check the affected view. Never inject synthetic input into the user's live desktop session; use an isolated display (for example `Xvfb :99`) for scripted UI checks. Launch the app there with `env -u WAYLAND_DISPLAY DISPLAY=:99 ...`: GPUI prefers Wayland, so a leftover `WAYLAND_DISPLAY` opens the window on the user's desktop.
 - Update `docs/upstream-compatibility.md` whenever behavior relative to Pi or the archived qt changes.
