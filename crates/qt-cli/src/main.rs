@@ -40,12 +40,7 @@ fn current_dir() -> PathBuf {
 }
 
 fn resolve(cwd: &Path, path: &str) -> String {
-    let p = Path::new(path);
-    if p.is_absolute() {
-        path.to_string()
-    } else {
-        cwd.join(p).to_string_lossy().into_owned()
-    }
+    qt_runtime::cli_args::resolve_path(cwd, path)
 }
 
 fn run(raw: &[String]) -> i32 {
@@ -116,32 +111,12 @@ fn run(raw: &[String]) -> i32 {
         eprintln!("Error: @file arguments are not supported in RPC mode");
         return 1;
     }
-    if parsed.fork.is_some() {
-        let mut conflicts = Vec::new();
-        if parsed.session.is_some() {
-            conflicts.push("--session");
-        }
-        if parsed.continue_session {
-            conflicts.push("--continue");
-        }
-        if parsed.resume {
-            conflicts.push("--resume");
-        }
-        if parsed.no_session {
-            conflicts.push("--no-session");
-        }
-        if !conflicts.is_empty() {
-            eprintln!(
-                "Error: --fork cannot be combined with {}",
-                conflicts.join(", ")
-            );
-            return 1;
-        }
+    if let Some(error) = parsed.fork_error() {
+        eprintln!("Error: {error}");
+        return 1;
     }
-    if parsed.api_key.is_some() && parsed.model.is_none() && parsed.models.is_empty() {
-        eprintln!(
-            "Error: --api-key requires a model to be specified via --model, --provider/--model, or --models"
-        );
+    if let Some(error) = parsed.api_key_error() {
+        eprintln!("Error: {error}");
         return 1;
     }
     if let Err(message) = run::check_memory_child(&parsed) {

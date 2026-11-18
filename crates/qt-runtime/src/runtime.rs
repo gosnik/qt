@@ -83,6 +83,9 @@ struct Inner {
     current_model: Arc<Mutex<Option<ModelRef>>>,
     refresh: Mutex<Option<ModelRefresh>>,
     background: AtomicBool,
+    /// Interactive: apply `--model` / `--thinking` to the conversations the
+    /// window creates until the first run starts.
+    startup_selection_pending: AtomicBool,
     /// Where interactive conversations send runs that extensions or worker
     /// completions start (the GUI transcript).
     run_sink: Mutex<Option<RunSink>>,
@@ -507,11 +510,13 @@ impl Runtime {
                 current_model,
                 refresh: Mutex::new(None),
                 background: AtomicBool::new(false),
+                startup_selection_pending: AtomicBool::new(options.mode.is_interactive()),
                 run_sink: Mutex::new(None),
                 options,
             }),
         };
         if runtime.inner.options.mode.is_interactive() {
+            runtime.add_startup_warnings();
             // The desktop app creates conversations itself; bind each new one
             // (weakly, so the engine's hooks do not keep the runtime alive).
             let weak = Arc::downgrade(&runtime.inner);
@@ -522,7 +527,15 @@ impl Runtime {
                 .add_conversation_listener(Arc::new(move |conversation: &Conversation| {
                     if let Some(inner) = weak.upgrade() {
                         let run_sink = inner.run_sink.lock().expect("run sink lock").clone();
-                        Runtime { inner }.attach(
+                        let runtime = Runtime { inner };
+                        if runtime
+                            .inner
+                            .startup_selection_pending
+                            .load(Ordering::SeqCst)
+                        {
+                            runtime.apply_startup_selection(conversation);
+                        }
+                        runtime.attach(
                             conversation,
                             AttachOptions {
                                 run_sink,
@@ -531,8 +544,57 @@ impl Runtime {
                         );
                     }
                 }));
+            let weak = Arc::downgrade(&runtime.inner);
+            runtime
+                .inner
+                .engine
+                .hooks()
+                .add_agent_event_listener(Arc::new(move |event: &qt_core::AgentEvent| {
+                    if matches!(event, qt_core::AgentEvent::AgentStart)
+                        && let Some(inner) = weak.upgrade()
+                    {
+                        inner
+                            .startup_selection_pending
+                            .store(false, Ordering::SeqCst);
+                    }
+                }));
         }
         Ok(runtime)
+    }
+
+    /// Interactive startup warnings (archived
+    /// `collect_interactive_startup_diagnostics` and
+    /// `make_anthropic_subscription_auth_warning`), unless `quietStartup` is
+    /// set without `--verbose`.
+    fn add_startup_warnings(&self) {
+        let engine = &self.inner.engine;
+        let quiet = engine
+            .settings()
+            .raw()
+            .get("quietStartup")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if quiet && !self.inner.options.verbose {
+            return;
+        }
+        let mut warnings = Vec::new();
+        warnings.extend(crate::startup_warnings::package_update_warning(
+            engine.workspace_policy().root(),
+            self.inner.home.root(),
+            self.inner.options.offline || engine.is_offline(),
+        ));
+        let auth = qt_core::config::AuthStore::load(&self.inner.home).unwrap_or_default();
+        warnings.extend(
+            crate::startup_warnings::anthropic_subscription_auth_warning(
+                self.startup_model().as_ref(),
+                &auth,
+                qt_core::auth::env_api_key("anthropic").as_deref(),
+            ),
+        );
+        let mut diagnostics = self.inner.diagnostics.lock().expect("diagnostics lock");
+        for warning in warnings {
+            crate::startup_warnings::push_unique(&mut diagnostics, warning);
+        }
     }
 
     // ----- accessors ---------------------------------------------------------
@@ -651,6 +713,20 @@ impl Runtime {
                     deliver_subagent_events: self.inner.options.mode.is_interactive(),
                 },
             );
+        }
+    }
+
+    /// Hand a run's events to the interactive run sink (the window pumps
+    /// them into its transcript, as for runs extensions start). Returns
+    /// `false` when no sink is installed.
+    pub fn deliver_run(&self, events: async_channel::Receiver<qt_core::AgentEvent>) -> bool {
+        let sink = self.inner.run_sink.lock().expect("run sink lock").clone();
+        match sink {
+            Some(sink) => {
+                sink(events);
+                true
+            }
+            None => false,
         }
     }
 

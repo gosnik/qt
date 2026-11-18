@@ -862,6 +862,35 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
     selects that Ollama model (an exact id wins over reading `:9b` as a thinking suffix;
     `qwen3.5:9b:high` still sets the level). The archived binary only matched configured
     models.
+  - **Desktop app command line:** `qt` parses with the same parser as `qt-cli`
+    (`qt_runtime::cli_args`) and builds its runtime options with the same function, so
+    `--provider`, `--model`, `--api-key`, `--thinking`, `--models`, `--system-prompt`,
+    `--append-system-prompt`, `--tools`, `--no-tools`, `--no-builtin-tools`, `--no-memory`,
+    `-e`, `--no-extensions`, `--skill`, `--prompt-template`, `--theme` and their `--no-*`
+    toggles, `--no-context-files`, `--offline`, `--discover-local-models`, the log flags and
+    extension flags act as in `qt-cli`; `--model` / `--thinking` apply to the conversations
+    the window opens until the first run starts (also to a `--continue` / `--session` /
+    picked session). Paths are relative to where `qt` was started (also with `--cwd`, which
+    is qt-specific). `-p`, `--mode`, `--export` and `--list-models` exit 1 with
+    `<flags> is/are only available in qt-cli, the headless front end ...` instead of being
+    ignored. Positionals are messages as in the archive; for compatibility a single
+    positional that is an existing directory written as a path (`.`, `..`, absolute or
+    containing `/`) opens that project instead (a bare word is always a message).
+    Messages, `@file` arguments and piped stdin form the initial prompt (archived
+    `prepare_initial_message`), sent when the window opens with the `input` hooks and
+    template / skill expansion; further messages are queued as follow-ups (Pi interactive
+    `initialMessages`; the archived interactive mode dropped them). Built-in and extension
+    slash commands are not run from the command line. The archive switched to print mode
+    whenever stdin was not a terminal; `qt` reads stdin only when it is a pipe or a regular
+    file and prepends non-empty input to the window's first prompt (use `qt-cli` for a
+    headless run). `--resume` with an initial message, and an initial message for a
+    session whose cwd is gone, exit 1 (the window cannot ask first). Interactive runtimes
+    add the archived startup warnings to `Runtime::diagnostics()`: `Package updates
+    available: <sources>` (unpinned npm/git packages from the update plan; skipped offline)
+    and the Anthropic subscription-auth notice (startup model on `anthropic` with an OAuth
+    login or an `sk-ant-oat` stored or environment key), unless `quietStartup` is set
+    without `--verbose`; `qt` also prints them to stderr. Print, JSON and RPC runs never
+    produced them, as in the archive.
   - Print and JSON modes submit each message the way Pi's `AgentSession.prompt` does (the
     archived binary sent the text as is): an extension command runs instead of a prompt
     (output lines and `Extension error (command:<name>): <error>` on stderr), then the
@@ -996,7 +1025,8 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   session flags: `-c`/`--continue` (most recent session, this folder first), `-r`/`--resume`
   (opens the resume picker), `--session <path|id>`, `--fork <path|id>` (a `fork-<id>` copy),
   `--no-session` and `--session-dir`; unknown ids print `No session found matching '…'` and
-  exit 1, and `--fork` / `--no-session` conflicts use the CLI wording. Enter saves a label
+  exit 1, and `--fork` / `--no-session` conflicts use the CLI wording. The rest of the `qt`
+  command line is described under **Desktop app command line**. Enter saves a label
   being edited in the tree. The transcript reloads after compaction
   and tree navigation and renders compaction (`[compaction] Compacted from N tokens`), branch
   summary (`[branch]`) and displayed custom messages (`[customType]`).

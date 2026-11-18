@@ -88,6 +88,8 @@ pub struct RuntimeOptions {
     pub session_dir: Option<PathBuf>,
     /// `--no-session`.
     pub no_session: bool,
+    /// `--verbose`: report startup warnings even with `quietStartup`.
+    pub verbose: bool,
     /// Run the archived startup migrations before loading settings.
     pub startup_migrations: bool,
     /// Executable for subagent, memory pre-handler and Dreaming children

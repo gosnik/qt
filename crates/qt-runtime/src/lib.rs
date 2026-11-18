@@ -19,10 +19,12 @@
 //! panels on top of it, and [`Runtime::attach`] binds the per-conversation
 //! parts (extension host, memory session, subagent coordinator).
 
+pub mod cli_args;
 pub mod code;
 pub mod commands;
 pub mod extensions;
 pub mod index_commands;
+pub mod initial_prompt;
 pub mod llama_commands;
 pub mod mcp;
 pub mod mcp_commands;
@@ -30,6 +32,7 @@ pub mod memory;
 pub mod options;
 pub mod package_resources;
 pub mod runtime;
+pub mod startup_warnings;
 pub mod subagents;
 
 pub use options::{
