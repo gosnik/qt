@@ -29,11 +29,16 @@ TUI-only behaviour (terminal rendering, Kitty images, SIGWINCH, OSC progress, `/
 Wave 1 (2026-11-18) delivered the libraries below as tested code; these wiring steps are what
 remain before the checked items are visible in the app and CLI.
 
-- [ ] Engine reads workspace policy, bash and web options, mutation policy and image resize from settings and passes them to tools.
-- [ ] Engine builds the system prompt from `resources::load_resources` (skills, SYSTEM.md, APPEND_SYSTEM.md, shellPath).
+- [x] Engine reads workspace policy, bash and web options, mutation policy and image resize from settings and passes them to tools.
+- [x] Engine builds the system prompt from `resources::load_resources` (skills, SYSTEM.md, APPEND_SYSTEM.md, shellPath).
 - [ ] Composition root (`qt-runtime`) registers index tools + service, MCP manager + tools, llama provider, memory and extensions for app and CLI.
-- [ ] Pluggable provider backends in qt-core so `llama` (qt-llama) is dispatched by `provider::stream`.
-- [ ] Settings migration from milestone-1 `ollama` provider id to `ollama:local`.
+- [x] Pluggable provider backends in qt-core so `llama` (qt-llama) is dispatched by `provider::stream`.
+- [x] Settings migration from milestone-1 `ollama` provider id to `ollama:local`.
+
+Wave 2 (2026-11-18) added these as tested libraries, not yet wired into app/CLI: subagents
+(definitions, tool, persistent workers), memory recall/rendering/capture/prehandler/tools/CLI+RPC
+handlers, Dreaming/research/verifier/post-processing, extension packages and `ExtensionUi`,
+core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 
 ## Milestone 2: Harness and sessions
 
@@ -57,7 +62,7 @@ remain before the checked items are visible in the app and CLI.
 - [x] Prompt templates: roots, frontmatter, argument expansion (`$1`, `$@`, `$ARGUMENTS`, `${@:N:L}`, `{{args}}`), exposed as slash commands.
 - [x] SYSTEM.md / APPEND_SYSTEM.md (project and agent home), `--system-prompt`, `--append-system-prompt`.
 - [x] Runtime metadata section (shell, timezone, network, permissions), workspace-policy text.
-- [ ] Themes: JSON theme files (51 tokens), discovery roots, live reload; mapped onto the GPUI theme.
+- [x] Themes: JSON theme files (51 tokens), discovery roots, live reload; mapped onto the GPUI theme.
 
 ## Milestone 4: Providers and models
 
@@ -70,7 +75,7 @@ remain before the checked items are visible in the app and CLI.
 - [x] Built-in model catalog (providers, ~77 models, context/max tokens/pricing/thinking maps); `models.json` overrides incl. `!command` keys; cost calculation incl. service tiers; thinking levels minimal/xhigh with clamping.
 - [x] OpenRouter extras: pricing/metadata, disk cache, credits; image-generation models.
 - [ ] Auth: OAuth PKCE login with localhost callback (anthropic, openai-codex), token refresh *(gap in C++)*, `/login` `/logout` GUI, env-var table (~28 providers), legacy auth.json shapes, `--api-key`.
-- [ ] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
+- [x] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
 - [ ] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`.
 - [ ] In-process llama.cpp via a `qt-llama-sys` crate (library complete in `qt-llama`; needs provider dispatch, model picker, `--discover-local-models`, `/llama` panel) building the PrismML fork submodule (needed for Q2_0): settings.llama (backend, context, generation, kvCache, grammar, embeddings, models), GPU offload planning, GGUF discovery and classification, `--discover-local-models`, tool-call parsing, embeddings, `/llama` panel.
 
@@ -106,21 +111,21 @@ remain before the checked items are visible in the app and CLI.
 - [ ] RPC mode (all commands and events, extension UI requests).
 - [ ] Full CLI flag set (model, thinking, tools, skills/templates/themes toggles, `--no-context-files`, `--list-models` table, `--export`, `--offline`, logging flags/env).
 - [ ] Subcommands: `install/remove/update/list` packages, `config`, `memory`.
-- [ ] Startup migrations (oauth.json, sessions dir, tools→bin, commands→prompts).
-- [ ] Logging (`--log-file`, `--log-stderr`, `--log-level`, `QT_LOG_*`).
+- [x] Startup migrations (oauth.json, sessions dir, tools→bin, commands→prompts).
+- [x] Logging (`--log-file`, `--log-stderr`, `--log-level`, `QT_LOG_*`).
 
 ## Milestone 9: GUI equivalents of interactive features
 
 - [ ] Command palette / slash commands with autocomplete (all built-ins listed in the inventory).
 - [ ] `/settings` panel, `/session` and `/status` info, `/context` inspector, `/export` (HTML + JSONL), `/share` (gist), `/copy`, `/name`, `/changelog`, `/scoped-models` / `enabledModels`, model refresh.
 - [ ] Image paste and drop into the composer; prompt history (`history.jsonl`) with Up/Down; external editor.
-- [ ] HTML export renderer.
+- [x] HTML export renderer.
 
 ## Milestone 10: Extensions
 
-- [ ] Discovery (`-e`, `.pi/extensions`, agent home, packages with filters), manifest v1, `package.json` `pi.extensions`.
-- [ ] Rhai script runtime (decision 2026-11-18, replaces AngelScript; `.rhai` files) with the same host API (`pi.*`, `ctx.*`), lifecycle events, commands, tools, flags, providers, resources, step budget and source limits.
-- [ ] Subprocess JSON-RPC transport.
+- [x] Discovery (`-e`, `.pi/extensions`, agent home, packages with filters), manifest v1, `package.json` `pi.extensions`.
+- [x] Rhai script runtime (decision 2026-11-18, replaces AngelScript; `.rhai` files) with the same host API (`pi.*`, `ctx.*`), lifecycle events, commands, tools, flags, providers, resources, step budget and source limits.
+- [x] Subprocess JSON-RPC transport.
 - [ ] `ctx.ui.*` dialogs and status/widgets/header/footer/working indicator mapped to GPUI; message renderers, shortcuts, autocomplete providers, custom components.
 - [ ] `/extensions`, `/skills`, `/prompts`, `/themes` package toggles; `/reload`.
 
