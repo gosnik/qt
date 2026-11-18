@@ -141,7 +141,15 @@ impl Transcript {
 
     pub fn apply_event(&mut self, event: &AgentEvent, cx: &mut Context<Self>) {
         match event {
-            AgentEvent::AgentStart | AgentEvent::Warning(_) | AgentEvent::AgentEnd { .. } => {}
+            AgentEvent::AgentStart
+            | AgentEvent::Warning(_)
+            | AgentEvent::AgentEnd { .. }
+            | AgentEvent::CustomMessageEnd(_)
+            | AgentEvent::QueueUpdate { .. }
+            | AgentEvent::CompactionStart { .. }
+            | AgentEvent::CompactionEnd { .. }
+            | AgentEvent::RetryStart { .. }
+            | AgentEvent::RetryEnd { .. } => {}
             AgentEvent::AssistantStart => self.stream_items.clear(),
             AgentEvent::Stream(stream) => self.apply_stream(stream, cx),
             AgentEvent::MessageEnd(Message::User { content, .. }) => {

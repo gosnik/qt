@@ -84,6 +84,11 @@ impl Settings {
         &self.raw
     }
 
+    /// Mutable access for subsystems that own their own settings keys.
+    pub fn raw_mut(&mut self) -> &mut Map<String, Value> {
+        &mut self.raw
+    }
+
     fn str_key(&self, key: &str) -> Option<String> {
         self.raw
             .get(key)

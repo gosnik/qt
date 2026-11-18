@@ -257,7 +257,11 @@ impl Workspace {
             return;
         }
         if self.running {
-            self.queued.push(text);
+            // Enter while the agent runs steers it after the current tool calls.
+            if let Err(err) = self.conversation.steer(&text, Vec::new()) {
+                window.push_notification(Notification::error(format!("{err:#}")), cx);
+                return;
+            }
         } else if !self.start(text, window, cx) {
             return;
         }
@@ -303,15 +307,29 @@ impl Workspace {
             AgentEvent::Warning(message) => {
                 window.push_notification(Notification::warning(message), cx)
             }
+            AgentEvent::QueueUpdate {
+                steering,
+                follow_up,
+            } => {
+                self.queued = steering.into_iter().chain(follow_up).collect();
+                cx.notify();
+            }
+            AgentEvent::CompactionEnd {
+                error: Some(error), ..
+            }
+            | AgentEvent::RetryEnd {
+                success: false,
+                final_error: Some(error),
+                ..
+            } => window.push_notification(Notification::warning(error), cx),
             AgentEvent::AgentEnd { aborted, .. } => {
                 self.running = false;
                 self.sessions = self.engine.sessions();
                 if aborted {
-                    self.queued.clear();
-                } else if !self.queued.is_empty() {
-                    let next = self.queued.remove(0);
-                    self.start(next, window, cx);
+                    self.conversation.clear_queue();
                 }
+                let queue = self.conversation.queue();
+                self.queued = queue.steering.into_iter().chain(queue.follow_up).collect();
                 cx.notify();
             }
             _ => {}

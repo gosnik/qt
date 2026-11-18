@@ -1,13 +1,16 @@
 //! UI-agnostic runtime for the qt coding agent.
 //!
 //! The crate owns everything that is not presentation: configuration in the
-//! agent home (`~/.qt`), model providers, the tool set, the agent loop, and
-//! session persistence. Front ends (the GPUI desktop app, the headless CLI)
-//! drive it through [`engine::Engine`] and consume [`agent::AgentEvent`]s.
+//! agent home (`~/.qt`), model providers, the tool set, the agent loop, the
+//! harness around it (compaction, retry, queues, hooks, goals) and session
+//! persistence. Front ends (the GPUI desktop app, the headless CLI) drive it
+//! through [`engine::Engine`] / [`engine::Conversation`] and consume
+//! [`agent::AgentEvent`]s.
 
 pub mod agent;
 pub mod config;
 pub mod engine;
+pub mod harness;
 pub mod message;
 pub mod prompt;
 pub mod provider;
@@ -18,6 +21,11 @@ pub mod util;
 
 pub use agent::{AgentEvent, ToolExecution};
 pub use config::{AgentHome, AuthStore, Settings};
-pub use engine::{Conversation, Engine};
-pub use message::{AssistantMessage, ContentBlock, Message, StopReason, ToolResultMessage, Usage};
+pub use engine::{Conversation, Delivery, Engine, Fork, NavigateOptions, TreeNavigation};
+pub use harness::{CompactionReason, CompactionResult, Hooks, QueueMode, SessionStats};
+pub use message::{
+    AgentMessage, AssistantMessage, ContentBlock, CustomMessage, Message, StopReason,
+    ToolResultMessage, Usage,
+};
 pub use provider::{ModelInfo, ModelRef};
+pub use session::{SessionEntry, SessionSummary, SessionTree};
