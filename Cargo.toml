@@ -12,6 +12,7 @@ qt-core = { path = "crates/qt-core" }
 qt-llama-sys = { path = "crates/qt-llama-sys" }
 qt-llama = { path = "crates/qt-llama" }
 qt-mcp = { path = "crates/qt-mcp" }
+qt-extensions = { path = "crates/qt-extensions" }
 
 anyhow = "1"
 async-channel = "2"
@@ -27,6 +28,7 @@ notify = "8"
 rand = "0.9"
 rusqlite = { version = "0.43", features = ["bundled"] }
 regex = "1"
+rhai = { version = "1.23", features = ["sync", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

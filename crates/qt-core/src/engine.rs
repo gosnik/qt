@@ -826,6 +826,25 @@ impl Conversation {
         )
     }
 
+    /// The system prompt the next run starts from (before
+    /// `before_agent_start` hooks), for extensions and inspectors.
+    pub fn system_prompt(&self) -> String {
+        self.base_system_prompt()
+    }
+
+    /// Persist extension state as a `custom` entry; while a run is active
+    /// it is written at the next save point.
+    pub fn append_custom_entry(&self, custom_type: &str, data: Option<Value>) -> Result<()> {
+        let mut state = self.lock();
+        Self::record_entry(
+            &mut state,
+            EntryKind::Custom {
+                custom_type: custom_type.into(),
+                data,
+            },
+        )
+    }
+
     // ----- session metadata ------------------------------------------------
 
     pub fn name(&self) -> Option<String> {

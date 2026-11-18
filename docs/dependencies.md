@@ -76,6 +76,15 @@ from the lists above.
 | --- | --- |
 | `rusqlite` (bundled) | SQLite store at `<agent_home>/memory/memory.sqlite3`; the bundled build provides FTS5 and JSON1, matching the archived schema and migrations without a system SQLite |
 
+## Extensions (`qt-extensions`)
+
+| Crate | Why |
+| --- | --- |
+| `rhai` 1 (`sync`, `serde`) | Embedded, sandboxable script language for extensions (decision 2026-11-18, replaces AngelScript): pure Rust, per-run operation limits, no file or network access, disabled `import`/`eval`; `sync` makes engines shareable across the engine's threads |
+
+`qt-extensions` also uses `qt-core`, `async-channel`, `dirs`, `futures`, `serde`,
+`serde_json`, `tokio`, `tokio-util` and `tempfile` (dev) from the lists above.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including
