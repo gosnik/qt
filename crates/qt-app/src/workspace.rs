@@ -52,11 +52,12 @@ use crate::model_picker::{
 };
 use crate::run_status::{Activity, dequeue_text, goal_line, queue_rows};
 use crate::session_views::{self, ActionHandler, SessionAction, relative_time};
-use crate::sessions::user_entry_ids;
 use crate::settings_panel::{self, SettingsHooks, SettingsPanel, get_bool};
 use crate::theme::{self, ThemeState};
-use crate::transcript::{Transcript, TranscriptEvent};
+use crate::transcript::{Transcript, TranscriptEvent, initial_window};
 use crate::{login, ollama_panel};
+use qt_core::session_log::BranchLog;
+use std::sync::Arc;
 
 actions!(
     qt,
@@ -240,6 +241,7 @@ impl Workspace {
                 window,
                 |this, _, event: &TranscriptEvent, window, cx| match event {
                     TranscriptEvent::Fork(id) => this.fork_from(id.clone(), window, cx),
+                    TranscriptEvent::Reload => this.reload_transcript(cx),
                 },
             ),
             window.observe_window_appearance(|_, cx| theme::on_appearance_changed(cx)),
@@ -707,11 +709,30 @@ impl Workspace {
         }));
     }
 
+    /// Show the current branch: a window of its last entries read from the
+    /// session file (older ones are read back as the user scrolls), or the
+    /// whole in-memory branch while the session has not been written yet.
     fn reload_transcript(&mut self, cx: &mut Context<Self>) {
-        let messages = self.conversation.agent_messages();
-        let ids = user_entry_ids(&self.conversation.branch(), &messages);
-        self.transcript
-            .update(cx, |t, cx| t.load(&messages, &ids, cx));
+        let leaf = self.conversation.leaf_id();
+        let log = leaf.as_deref().and_then(|leaf| {
+            BranchLog::open(&self.conversation.session_path(), Some(leaf))
+                .ok()
+                .filter(|log| !log.is_empty())
+        });
+        match log {
+            Some(log) => {
+                let range = initial_window(&log);
+                let entries = log.read(range.clone()).unwrap_or_default();
+                let log = Some((Arc::new(log), range));
+                self.transcript
+                    .update(cx, |t, cx| t.load_window(log, &entries, cx));
+            }
+            None => {
+                let branch = self.conversation.branch();
+                self.transcript
+                    .update(cx, |t, cx| t.load_window(None, &branch, cx));
+            }
+        }
     }
 
     /// After a run, give live user messages their persisted entry ids.

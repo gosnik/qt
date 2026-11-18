@@ -2,14 +2,16 @@
 //! markdown, thinking blocks, tool-call cards, compaction / branch
 //! summaries and custom messages.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::text::{TextView, TextViewState};
+use gpui_kit::component::text::{TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -19,6 +21,8 @@ use qt_core::message::{
     StopReason, ToolResultMessage, UserContent,
 };
 use qt_core::provider::StreamEvent;
+use qt_core::session::{EntryKind, SessionEntry};
+use qt_core::session_log::BranchLog;
 use serde_json::Value;
 
 use crate::theme::QtPalette;
@@ -27,7 +31,43 @@ use crate::theme::QtPalette;
 const PREVIEW_LINES: usize = 6;
 /// Lines of tool output shown while a card is expanded.
 const EXPANDED_LINES: usize = 600;
-const MAX_CONTENT_WIDTH: f32 = 920.;
+const MAX_CONTENT_WIDTH: f32 = 780.;
+/// Branch entries shown when a session is (re)loaded.
+const INITIAL_ENTRIES: usize = 120;
+/// Entries read back (or forward) from the session file per slide.
+const CHUNK_ENTRIES: usize = 80;
+/// Rows kept in the window; beyond this the far end is dropped (and read
+/// back again when the user scrolls there).
+const MAX_ITEMS: usize = 1200;
+/// Rows from the top edge that trigger reading older entries.
+const EDGE_ROWS: usize = 3;
+/// Live rows after which a finished run reloads the window from the log.
+const LIVE_LIMIT: usize = 400;
+
+/// Rows built from one slice of the session file.
+#[derive(Clone, Copy)]
+struct Chunk {
+    entries: usize,
+    items: usize,
+}
+
+/// The window's position in the session file's branch.
+struct History {
+    log: Arc<BranchLog>,
+    /// First and one-past-last branch entry in the window.
+    start: usize,
+    end: usize,
+    /// Rows per loaded slice, oldest first. Rows after the last chunk are
+    /// live (streamed or pushed since the window was loaded).
+    chunks: VecDeque<Chunk>,
+}
+
+/// Branch range to show first: the last [`INITIAL_ENTRIES`] entries,
+/// starting at a user message.
+pub fn initial_window(log: &BranchLog) -> Range<usize> {
+    let end = log.len();
+    log.chunk_start(end, INITIAL_ENTRIES)..end
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolStatus {
@@ -95,10 +135,26 @@ enum Item {
     Notice(SharedString),
 }
 
+impl Item {
+    /// The markdown state this row renders, if any.
+    fn text_state(&self) -> Option<&Entity<TextViewState>> {
+        match self {
+            Item::Text(state)
+            | Item::Thinking { state, .. }
+            | Item::Summary { state, .. }
+            | Item::Custom { state, .. }
+            | Item::Card { state, .. } => Some(state),
+            _ => None,
+        }
+    }
+}
+
 /// Events the workspace reacts to.
 pub enum TranscriptEvent {
     /// Fork a new session before the user message with this entry id.
     Fork(String),
+    /// Many live rows accumulated; reload the window from the session file.
+    Reload,
 }
 
 impl EventEmitter<TranscriptEvent> for Transcript {}
@@ -117,7 +173,12 @@ pub struct Transcript {
     cwd: PathBuf,
     hide_thinking: bool,
     next_bash_id: u64,
-    _observers: Vec<Subscription>,
+    /// Markdown (re)parse observers, by text state.
+    observers: HashMap<EntityId, Subscription>,
+    /// Session file read-back; `None` for unsaved sessions.
+    history: Option<History>,
+    slide_pending: bool,
+    _scroll: Subscription,
     custom_renderer: Option<CustomRenderer>,
     /// Extension `setHiddenThinkingLabel`.
     hidden_thinking_label: Option<SharedString>,
@@ -127,15 +188,21 @@ pub struct Transcript {
 
 impl Transcript {
     pub fn new(cwd: &Path, cx: &mut Context<Self>) -> Self {
+        let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        // Scrolling notifies the scroller state; slide the window then.
+        let scroll = cx.observe(&scroller, |this, _, cx| this.schedule_slide(cx));
         Self {
             items: Vec::new(),
-            scroller: cx.new(|cx| MessageScrollerState::new(0, cx)),
+            scroller,
             stream_items: HashMap::new(),
             tool_items: HashMap::new(),
             cwd: cwd.to_path_buf(),
             hide_thinking: false,
             next_bash_id: 0,
-            _observers: Vec::new(),
+            observers: HashMap::new(),
+            history: None,
+            slide_pending: false,
+            _scroll: scroll,
             custom_renderer: None,
             hidden_thinking_label: None,
             tools_expanded: false,
@@ -242,57 +309,100 @@ impl Transcript {
         }
     }
 
-    /// Replace the transcript with a stored context. `user_ids` holds the
-    /// session entry id of each user message (see
-    /// [`crate::sessions::user_entry_ids`]).
-    pub fn load(
+    /// Replace the transcript with session entries (root → leaf order).
+    /// With `log`, `entries` are its `range` and older or newer entries are
+    /// read back from the session file as the user scrolls; without it
+    /// (unsaved sessions) `entries` is the whole branch.
+    pub fn load_window(
         &mut self,
-        messages: &[AgentMessage],
-        user_ids: &[Option<String>],
+        log: Option<(Arc<BranchLog>, Range<usize>)>,
+        entries: &[SessionEntry],
         cx: &mut Context<Self>,
     ) {
         self.items.clear();
         self.stream_items.clear();
         self.tool_items.clear();
-        self._observers.clear();
-        for (index, message) in messages.iter().enumerate() {
-            let entry_id = user_ids.get(index).cloned().flatten();
-            match message {
-                AgentMessage::Llm(Message::User { content, .. }) => {
-                    self.push_user(content, entry_id)
+        self.observers.clear();
+        for entry in entries {
+            self.push_entry(entry, cx);
+        }
+        self.fail_pending_tools();
+        self.history = log.map(|(log, range)| History {
+            log,
+            start: range.start,
+            end: range.end,
+            chunks: VecDeque::from([Chunk {
+                entries: range.len(),
+                items: self.items.len(),
+            }]),
+        });
+        let count = self.items.len();
+        self.scroller.update(cx, |s, cx| {
+            s.reset(count, cx);
+            s.scroll_to_end(cx);
+        });
+        cx.notify();
+    }
+
+    /// Rows for one session entry.
+    fn push_entry(&mut self, entry: &SessionEntry, cx: &mut Context<Self>) {
+        match &entry.kind {
+            EntryKind::Message(message) => self.push_message(message, Some(&entry.id), cx),
+            EntryKind::Compaction(_) => {
+                if let Some(message) = entry.compaction_message() {
+                    self.push_harness(&message, cx);
                 }
-                AgentMessage::Llm(Message::Assistant(a)) => {
-                    for block in &a.content {
-                        match block {
-                            ContentBlock::Text { text } if !text.trim().is_empty() => {
-                                let state = self.markdown_state(text, cx);
-                                self.items.push(Item::Text(state));
-                            }
-                            ContentBlock::Thinking { thinking, .. }
-                                if !thinking.trim().is_empty() =>
-                            {
-                                let state = self.markdown_state(thinking, cx);
-                                self.items.push(Item::Thinking {
-                                    state,
-                                    expanded: false,
-                                    streaming: false,
-                                });
-                            }
-                            ContentBlock::ToolCall {
-                                id,
-                                name,
-                                arguments,
-                            } => self.push_tool(id, name, arguments.clone()),
-                            _ => {}
-                        }
-                    }
-                    self.push_stop_notice(a);
+            }
+            _ => {
+                if let Some(message) = entry.context_message() {
+                    self.push_harness(&message, cx);
                 }
-                AgentMessage::Llm(Message::ToolResult(r)) => self.apply_tool_result(r),
-                other => self.push_harness(other, cx),
             }
         }
-        // Calls left without a result belong to an interrupted run.
+    }
+
+    fn push_message(
+        &mut self,
+        message: &AgentMessage,
+        entry_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        match message {
+            AgentMessage::Llm(Message::User { content, .. }) => {
+                self.push_user(content, entry_id.map(str::to_string))
+            }
+            AgentMessage::Llm(Message::Assistant(a)) => {
+                for block in &a.content {
+                    match block {
+                        ContentBlock::Text { text } if !text.trim().is_empty() => {
+                            let state = self.markdown_state(text, cx);
+                            self.items.push(Item::Text(state));
+                        }
+                        ContentBlock::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
+                            let state = self.markdown_state(thinking, cx);
+                            self.items.push(Item::Thinking {
+                                state,
+                                expanded: false,
+                                streaming: false,
+                            });
+                        }
+                        ContentBlock::ToolCall {
+                            id,
+                            name,
+                            arguments,
+                        } => self.push_tool(id, name, arguments.clone()),
+                        _ => {}
+                    }
+                }
+                self.push_stop_notice(a);
+            }
+            AgentMessage::Llm(Message::ToolResult(r)) => self.apply_tool_result(r),
+            other => self.push_harness(other, cx),
+        }
+    }
+
+    /// Calls left without a result belong to an interrupted run.
+    fn fail_pending_tools(&mut self) {
         for item in &mut self.items {
             if let Item::Tool(tool) = item
                 && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
@@ -301,12 +411,178 @@ impl Transcript {
                 tool.output = "No result recorded (run was interrupted).".into();
             }
         }
-        let count = self.items.len();
-        self.scroller.update(cx, |s, cx| {
-            s.reset(count, cx);
-            s.scroll_to_end(cx);
+    }
+
+    /// Rows for `entries`, built apart from the current rows (tool results
+    /// only match calls within the same slice; slices start at user
+    /// messages, so a turn is never split).
+    fn build_rows(&mut self, entries: &[SessionEntry], cx: &mut Context<Self>) -> Vec<Item> {
+        let items = std::mem::take(&mut self.items);
+        let tools = std::mem::take(&mut self.tool_items);
+        let stream = std::mem::take(&mut self.stream_items);
+        for entry in entries {
+            self.push_entry(entry, cx);
+        }
+        self.fail_pending_tools();
+        let built = std::mem::replace(&mut self.items, items);
+        self.tool_items = tools;
+        self.stream_items = stream;
+        built
+    }
+
+    /// Rows after the last log chunk (streamed or pushed since loading).
+    fn live_items(&self) -> usize {
+        let logged: usize = self
+            .history
+            .as_ref()
+            .map_or(0, |h| h.chunks.iter().map(|c| c.items).sum());
+        self.items.len().saturating_sub(logged)
+    }
+
+    fn schedule_slide(&mut self, cx: &mut Context<Self>) {
+        if self.history.is_none() || self.slide_pending {
+            return;
+        }
+        self.slide_pending = true;
+        let this = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.slide_pending = false;
+                this.slide(cx);
+            });
         });
+    }
+
+    /// Read older entries when the top of the window is in view, or newer
+    /// ones (dropped earlier) when the bottom is.
+    fn slide(&mut self, cx: &mut Context<Self>) {
+        let Some(h) = &self.history else { return };
+        let (top, at_end) = {
+            let state = self.scroller.read(cx);
+            (state.logical_scroll_top().item_ix, !state.is_scrolled_up())
+        };
+        if h.start > 0 && top < EDGE_ROWS {
+            self.read_back(cx);
+        } else if at_end && h.end < h.log.len() && self.live_items() == 0 {
+            self.read_forward(cx);
+        }
+    }
+
+    fn read_back(&mut self, cx: &mut Context<Self>) {
+        let Some(h) = &self.history else { return };
+        let range = h.log.chunk_start(h.start, CHUNK_ENTRIES)..h.start;
+        let Ok(entries) = h.log.read(range.clone()) else {
+            self.history = None;
+            return;
+        };
+        let rows = self.build_rows(&entries, cx);
+        let added = rows.len();
+        self.items.splice(0..0, rows);
+        for index in self
+            .stream_items
+            .values_mut()
+            .chain(self.tool_items.values_mut())
+        {
+            *index += added;
+        }
+        if let Some(h) = &mut self.history {
+            h.start = range.start;
+            h.chunks.push_front(Chunk {
+                entries: range.len(),
+                items: added,
+            });
+        }
+        self.scroller.update(cx, |s, cx| {
+            s.prepend(added, cx);
+        });
+        self.trim_tail(cx);
         cx.notify();
+    }
+
+    fn read_forward(&mut self, cx: &mut Context<Self>) {
+        let Some(h) = &self.history else { return };
+        let range = h.end..h.log.chunk_end(h.end, CHUNK_ENTRIES);
+        let Ok(entries) = h.log.read(range.clone()) else {
+            self.history = None;
+            return;
+        };
+        let rows = self.build_rows(&entries, cx);
+        let added = rows.len();
+        self.items.extend(rows);
+        if let Some(h) = &mut self.history {
+            h.end = range.end;
+            h.chunks.push_back(Chunk {
+                entries: range.len(),
+                items: added,
+            });
+        }
+        self.scroller.update(cx, |s, cx| {
+            s.append(added, cx);
+        });
+        self.trim_front(cx);
+        cx.notify();
+    }
+
+    /// Drop the oldest slices while the window is over [`MAX_ITEMS`]
+    /// (when reading at the bottom).
+    fn trim_front(&mut self, cx: &mut Context<Self>) {
+        while self.items.len() > MAX_ITEMS {
+            let Some(h) = &mut self.history else { return };
+            if h.chunks.len() < 2 && self.items.len() - h.chunks.front().map_or(0, |c| c.items) == 0
+            {
+                return;
+            }
+            let Some(chunk) = h.chunks.pop_front() else {
+                return;
+            };
+            h.start += chunk.entries;
+            let removed: Vec<Item> = self.items.drain(0..chunk.items).collect();
+            self.forget_rows(&removed);
+            let shift = chunk.items;
+            self.stream_items.retain(|_, i| *i >= shift);
+            self.tool_items.retain(|_, i| *i >= shift);
+            for i in self
+                .stream_items
+                .values_mut()
+                .chain(self.tool_items.values_mut())
+            {
+                *i -= shift;
+            }
+            self.scroller.update(cx, |s, cx| {
+                s.splice(0..chunk.items, 0, cx);
+            });
+        }
+    }
+
+    /// Drop the newest slices while the window is over [`MAX_ITEMS`]
+    /// (when reading at the top). Never drops live rows.
+    fn trim_tail(&mut self, cx: &mut Context<Self>) {
+        while self.items.len() > MAX_ITEMS && self.live_items() == 0 {
+            let Some(h) = &mut self.history else { return };
+            if h.chunks.len() < 2 {
+                return;
+            }
+            let Some(chunk) = h.chunks.pop_back() else {
+                return;
+            };
+            h.end -= chunk.entries;
+            let keep = self.items.len() - chunk.items;
+            let removed: Vec<Item> = self.items.drain(keep..).collect();
+            self.forget_rows(&removed);
+            self.stream_items.retain(|_, i| *i < keep);
+            self.tool_items.retain(|_, i| *i < keep);
+            self.scroller.update(cx, |s, cx| {
+                s.splice(keep..keep + chunk.items, 0, cx);
+            });
+        }
+    }
+
+    fn forget_rows(&mut self, rows: &[Item]) {
+        for row in rows {
+            if let Some(state) = row.text_state() {
+                self.observers.remove(&state.entity_id());
+            }
+        }
     }
 
     /// Assign entry ids to user messages from the end (after a run, when
@@ -325,6 +601,12 @@ impl Transcript {
     }
 
     pub fn apply_event(&mut self, event: &AgentEvent, cx: &mut Context<Self>) {
+        if matches!(event, AgentEvent::AgentEnd { .. })
+            && self.history.is_some()
+            && self.live_items() > LIVE_LIMIT
+        {
+            cx.emit(TranscriptEvent::Reload);
+        }
         match event {
             AgentEvent::AgentStart
             | AgentEvent::TurnStart
@@ -557,15 +839,27 @@ impl Transcript {
 
     /// Re-measure the row when its markdown finishes (re)parsing.
     fn observe_text(&mut self, state: &Entity<TextViewState>, cx: &mut Context<Self>) {
-        let index = self.items.len();
-        let subscription = cx.observe(state, move |this, _, cx| this.changed(Some(index), cx));
-        self._observers.push(subscription);
+        let id = state.entity_id();
+        let subscription = cx.observe(state, move |this, _, cx| {
+            // Rows move when the window slides; find this one by its state.
+            let index = this
+                .items
+                .iter()
+                .rposition(|item| item.text_state().is_some_and(|s| s.entity_id() == id));
+            this.changed(index, cx)
+        });
+        self.observers.insert(id, subscription);
     }
 
     fn appended(&mut self, count: usize, cx: &mut Context<Self>) {
         self.scroller.update(cx, |s, cx| {
             s.append(count, cx);
         });
+        if self.items.len() > MAX_ITEMS + CHUNK_ENTRIES
+            && self.scroller.read(cx).is_following_tail()
+        {
+            self.trim_front(cx);
+        }
         cx.notify();
     }
 
@@ -636,11 +930,11 @@ impl Transcript {
                     })
                     .child(
                         v_flex()
-                            .max_w(relative(0.85))
+                            .max_w(relative(0.8))
                             .gap_1()
                             .px_4()
                             .py_2p5()
-                            .rounded_lg()
+                            .rounded_2xl()
                             .bg(palette.user_bg)
                             .text_color(palette.user_fg)
                             .child(lines)
@@ -658,7 +952,11 @@ impl Transcript {
             Item::Text(state) => div()
                 .w_full()
                 .text_sm()
-                .child(TextView::new(state).selectable(true))
+                .child(
+                    TextView::new(state)
+                        .selectable(true)
+                        .style(flat_text(&theme)),
+                )
                 .into_any_element(),
             Item::Thinking {
                 state,
@@ -702,13 +1000,14 @@ impl Transcript {
                     .when(expanded, |el| {
                         el.child(
                             div()
-                                .pl_4()
-                                .ml_1()
-                                .border_l_2()
-                                .border_color(theme.border)
+                                .pl_5()
                                 .text_xs()
                                 .text_color(palette.thinking_text)
-                                .child(TextView::new(state).selectable(true)),
+                                .child(
+                                    TextView::new(state)
+                                        .selectable(true)
+                                        .style(flat_text(&theme)),
+                                ),
                         )
                     })
                     .into_any_element()
@@ -720,76 +1019,51 @@ impl Transcript {
                 expanded,
             } => {
                 let expanded = *expanded;
-                let (tag, line) = match kind {
-                    SummaryKind::Compaction { tokens_before } => (
-                        "[compaction]",
-                        format!("Compacted from {} tokens", group_thousands(*tokens_before)),
-                    ),
-                    SummaryKind::Branch => ("[branch]", "Branch summary".to_string()),
+                let line = match kind {
+                    SummaryKind::Compaction { tokens_before } => {
+                        format!("Compacted from {} tokens", group_thousands(*tokens_before))
+                    }
+                    SummaryKind::Branch => "Branch summary".to_string(),
                 };
                 v_flex()
                     .w_full()
                     .gap_1()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(palette.custom_bg)
                     .child(
-                        h_flex()
-                            .id(("summary", index))
-                            .gap_2()
-                            .items_center()
-                            .cursor_pointer()
+                        quiet_row(("summary", index), &theme)
                             .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(palette.custom_label)
-                                    .child(tag),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(palette.custom_fg)
-                                    .child(line),
-                            )
-                            .child(div().text_xs().text_color(palette.dim).child(if expanded {
-                                "click to collapse"
-                            } else {
-                                "click to expand"
-                            })),
+                            .child(chevron(expanded))
+                            .child(div().flex_1().min_w_0().child(line)),
                     )
                     .when(expanded, |el| {
                         el.child(
                             div()
+                                .pl_5()
                                 .text_sm()
-                                .text_color(palette.custom_fg)
-                                .child(TextView::new(state).selectable(true)),
+                                .text_color(theme.muted_foreground)
+                                .child(
+                                    TextView::new(state)
+                                        .selectable(true)
+                                        .style(flat_text(&theme)),
+                                ),
                         )
                     })
                     .into_any_element()
             }
             Item::Custom { custom_type, state } => v_flex()
                 .w_full()
-                .gap_1()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(palette.custom_bg)
+                .gap_0p5()
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(FontWeight::BOLD)
                         .text_color(palette.custom_label)
-                        .child(format!("[{custom_type}]")),
+                        .child(custom_type.clone()),
                 )
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(palette.custom_fg)
-                        .child(TextView::new(state).selectable(true)),
+                    div().text_sm().text_color(palette.custom_fg).child(
+                        TextView::new(state)
+                            .selectable(true)
+                            .style(flat_text(&theme)),
+                    ),
                 )
                 .into_any_element(),
             Item::Bash(bash) => {
@@ -835,18 +1109,11 @@ impl Transcript {
             } => v_flex()
                 .w_full()
                 .gap_1()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .border_1()
-                .border_color(if *error { theme.danger } else { theme.border })
-                .bg(theme.muted.opacity(0.3))
                 .child(
                     h_flex()
-                        .gap_2()
+                        .gap_1p5()
                         .items_center()
                         .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(if *error {
                             theme.danger
                         } else {
@@ -870,17 +1137,18 @@ impl Transcript {
                                 .child(title.clone()),
                         ),
                 )
-                .child(div().text_sm().child(TextView::new(state).selectable(true)))
+                .child(
+                    div().text_sm().child(
+                        TextView::new(state)
+                            .selectable(true)
+                            .style(flat_text(&theme)),
+                    ),
+                )
                 .into_any_element(),
             Item::Error(message) => h_flex()
                 .w_full()
                 .gap_2()
                 .items_start()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.danger)
                 .text_sm()
                 .text_color(theme.danger)
                 .child(Icon::new(IconName::TriangleAlert).small())
@@ -894,11 +1162,12 @@ impl Transcript {
                 .child(text.clone())
                 .into_any_element(),
         };
+        let user = matches!(self.items[index], Item::User { .. });
         h_flex()
             .w_full()
             .justify_center()
             .px_6()
-            .py_1p5()
+            .map(|el| if user { el.pt_5().pb_2() } else { el.py_1() })
             .child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).child(body))
             .into_any_element()
     }
@@ -911,41 +1180,30 @@ impl Transcript {
         palette: &QtPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (icon, color, bg) = match tool.status {
-            ToolStatus::Pending | ToolStatus::Running => (
-                IconName::LoaderCircle,
-                theme.muted_foreground,
-                palette.tool_pending_bg,
-            ),
-            ToolStatus::Done => (
-                IconName::CircleCheck,
-                palette.success,
-                palette.tool_success_bg,
-            ),
-            ToolStatus::Failed => (IconName::CircleX, palette.error, palette.tool_error_bg),
-        };
         let summary = tool_summary(&tool.name, &tool.args, &self.cwd);
         let running = matches!(tool.status, ToolStatus::Pending | ToolStatus::Running);
-        let show_body =
-            tool.expanded || running || tool.diff.is_some() || tool.status == ToolStatus::Failed;
-        let header = h_flex()
-            .id(("tool", index))
-            .w_full()
-            .gap_2()
-            .items_center()
-            .px_3()
-            .py_1p5()
-            .bg(bg)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.muted))
+        let failed = tool.status == ToolStatus::Failed;
+        let show_body = tool.expanded || running || tool.diff.is_some() || failed;
+        let status: AnyElement = match tool.status {
+            ToolStatus::Pending | ToolStatus::Running => Spinner::new().xsmall().into_any_element(),
+            ToolStatus::Done => div().into_any_element(),
+            ToolStatus::Failed => Icon::new(IconName::CircleX)
+                .xsmall()
+                .text_color(palette.error)
+                .into_any_element(),
+        };
+        let header = quiet_row(("tool", index), theme)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
-            .child(Icon::new(icon).small().text_color(color))
+            .child(chevron(tool.expanded))
             .child(
                 div()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.tool_title)
+                    .flex_none()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if failed {
+                        palette.error
+                    } else {
+                        palette.tool_title
+                    })
                     .child(tool.name.clone()),
             )
             .child(
@@ -957,18 +1215,9 @@ impl Transcript {
                     .text_ellipsis()
                     .font_family(theme.mono_font_family.clone())
                     .text_xs()
-                    .text_color(theme.muted_foreground)
                     .child(summary),
             )
-            .child(
-                Icon::new(if tool.expanded {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .xsmall()
-                .text_color(theme.muted_foreground),
-            );
+            .child(status);
 
         let body = if !show_body || (tool.output.trim().is_empty() && tool.diff.is_none()) {
             None
@@ -993,16 +1242,9 @@ impl Transcript {
 
         v_flex()
             .w_full()
-            .rounded_md()
-            .border_1()
-            .border_color(if tool.status == ToolStatus::Failed {
-                theme.danger.opacity(0.5)
-            } else {
-                theme.border
-            })
-            .overflow_hidden()
+            .gap_1()
             .child(header)
-            .children(body.map(|b| div().border_t_1().border_color(theme.border).child(b)))
+            .children(body.map(|b| output_surface(theme).ml_5().child(b)))
             .into_any_element()
     }
 
@@ -1145,45 +1387,90 @@ fn render_bash(
     };
     v_flex()
         .w_full()
-        .rounded_md()
-        .border_1()
-        .border_color(theme.border)
-        .overflow_hidden()
+        .gap_1()
         .child(
             h_flex()
-                .px_3()
-                .py_1p5()
                 .gap_2()
-                .font_family(theme.mono_font_family.clone())
+                .items_center()
                 .text_sm()
-                .child(Icon::new(IconName::SquareTerminal).small())
-                .child(div().flex_1().child(format!("$ {command}")))
+                .text_color(theme.muted_foreground)
+                .child(Icon::new(IconName::SquareTerminal).xsmall())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .child(format!("$ {command}")),
+                )
                 .when(running, |el| el.child(Spinner::new().xsmall())),
         )
-        .child(
-            div()
-                .border_t_1()
-                .border_color(theme.border)
-                .child(render_output(
-                    shown,
-                    PREVIEW_LINES * 2,
-                    true,
-                    0,
-                    theme,
-                    palette.tool_output,
-                )),
-        )
+        .child(output_surface(theme).ml_5().child(render_output(
+            shown,
+            PREVIEW_LINES * 2,
+            true,
+            0,
+            theme,
+            palette.tool_output,
+        )))
         .when(!status.is_empty(), |el| {
             el.child(
                 div()
-                    .px_3()
-                    .pb_1p5()
+                    .ml_5()
                     .text_xs()
                     .text_color(palette.warning)
                     .child(status.join(" · ")),
             )
         })
         .into_any_element()
+}
+
+/// A quiet, clickable one-line row (tool calls, summaries): muted text that
+/// brightens on hover, no frame or fill.
+fn quiet_row(id: impl Into<ElementId>, theme: &component::Theme) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .w_full()
+        .gap_2()
+        .items_center()
+        .py_0p5()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .cursor_pointer()
+        .hover(|s| s.text_color(theme.foreground))
+}
+
+fn chevron(expanded: bool) -> Icon {
+    Icon::new(if expanded {
+        IconName::ChevronDown
+    } else {
+        IconName::ChevronRight
+    })
+    .xsmall()
+}
+
+/// Markdown without frames: code blocks sit on the same neutral surface as
+/// tool output instead of a bordered box.
+fn flat_text(theme: &component::Theme) -> TextViewStyle {
+    TextViewStyle::default().code_block(
+        StyleRefinement::default()
+            .border_0()
+            .rounded_lg()
+            .bg(theme.muted.opacity(0.45)),
+    )
+}
+
+/// The one neutral surface used for tool output, diffs and `!command`
+/// output.
+fn output_surface(theme: &component::Theme) -> Div {
+    div()
+        .rounded_lg()
+        .bg(theme.muted.opacity(0.45))
+        .overflow_hidden()
 }
 
 /// Short description of a tool call for its card header.
@@ -1255,6 +1542,8 @@ impl Render for Transcript {
             },
         )
         .jump_button(true)
+        // Rows space themselves (more air before a user turn).
+        .with_row_style(StyleRefinement::default().pb(px(0.)))
         .size_full()
     }
 }

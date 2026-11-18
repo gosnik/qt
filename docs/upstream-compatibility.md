@@ -1072,11 +1072,25 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   `pageBg`/`cardBg` give the window and panel backgrounds and decide light/dark mode (then
   `userMessageBg`, then `text`). Tokens map onto gpui-component colours (`accent` → primary,
   ring, caret; `borderMuted` → borders; `selectedBg` → list/selection; `userMessageBg` →
-  secondary; `success`/`error`/`warning`; `mdLink` → links); the rest (tool backgrounds,
-  diff colours, thinking text, custom-message colours) colour the transcript. The selected
+  secondary; `success`/`error`/`warning`; `mdLink` → links); diff colours, thinking text,
+  tool titles/output and custom-message colours colour the transcript. The Pi tool background
+  tokens (`toolPendingBg`, `toolSuccessBg`, `toolErrorBg`) and `customMessageBg` are parsed
+  but not drawn: the transcript is one flat surface (see below). The selected
   custom theme file is watched (`ThemeWatcher`, 100 ms debounce) and re-applied live. The
   theme picker is in Settings; the sidebar sun/moon button switches between `dark` and
   `light` and stores `theme`.
+- **Transcript:** styled after the Claude and ChatGPT desktop apps rather than Pi's TUI
+  boxes: one flat surface in a centred 780 px column; user messages in a soft rounded bubble;
+  assistant text unframed; thinking, tool calls, compaction/branch summaries and slash-command
+  output as quiet one-line rows (chevron to expand, red for a failed tool); tool output, diffs,
+  `!command` output and markdown code blocks on one neutral, borderless surface.
+- **Transcript history window:** the transcript shows the session's *branch* read from the
+  session file (`qt_core::session_log::BranchLog`), not the replayed context, so history from
+  before a compaction stays readable with the compaction marker in place. Loading shows the
+  last ~120 entries (starting at a user message); scrolling to the top reads ~80 older
+  entries back from the file, and past 1,200 rows the far end is dropped and read again when
+  scrolled back (the jump-to-latest button walks forward to the end). A run that adds more
+  than 400 rows reloads the window when it ends. Unsaved sessions show the in-memory branch.
 - **Login / logout:** one dialog replaces the archived `/login` and `/logout` selectors and
   the former API-keys dialog. Subscriptions (Anthropic Claude Pro/Max, ChatGPT Codex) run
   the core OAuth flow: the browser opens with the authorization URL, the localhost callback

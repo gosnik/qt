@@ -28,6 +28,7 @@ pub mod prompt;
 pub mod provider;
 pub mod resources;
 pub mod session;
+pub mod session_log;
 pub mod settings_layers;
 pub mod slash;
 pub mod sse;

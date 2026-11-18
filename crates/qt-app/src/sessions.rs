@@ -244,24 +244,6 @@ pub fn session_matches(session: &SessionSummary, query: &str) -> bool {
     words.iter().all(|w| hay.contains(w.as_str()))
 }
 
-/// Entry ids for the user messages of `messages`, aligned from the end with
-/// the user-message entries on the branch (compaction drops older ones from
-/// the context but never from the branch). Non-user messages get `None`.
-pub fn user_entry_ids(branch: &[SessionEntry], messages: &[AgentMessage]) -> Vec<Option<String>> {
-    let mut ids: Vec<String> = branch
-        .iter()
-        .filter(|e| e.is_user_message())
-        .map(|e| e.id.clone())
-        .collect();
-    let mut out = vec![None; messages.len()];
-    for (slot, message) in out.iter_mut().zip(messages).rev() {
-        if message.is_user() {
-            *slot = ids.pop();
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,34 +415,5 @@ mod tests {
         assert!(session_matches(&s, "ABC1"));
         assert!(session_matches(&s, "proj"));
         assert!(!session_matches(&s, "lexer compiler"));
-    }
-
-    #[test]
-    fn user_ids_align_from_the_end() {
-        let branch = vec![
-            entry("u1", None, user("a")),
-            entry("a1", Some("u1"), assistant("b")),
-            entry("u2", Some("a1"), user("c")),
-            entry("a2", Some("u2"), assistant("d")),
-        ];
-        // After compaction only the second turn is in context.
-        let messages = vec![
-            AgentMessage::Llm(Message::user_text("c")),
-            AgentMessage::Llm(Message::Assistant(AssistantMessage::default())),
-        ];
-        assert_eq!(
-            user_entry_ids(&branch, &messages),
-            [Some("u2".to_string()), None]
-        );
-        // A live user message not yet persisted takes the newest id only if present.
-        let more = vec![
-            AgentMessage::Llm(Message::user_text("a")),
-            AgentMessage::Llm(Message::user_text("c")),
-            AgentMessage::Llm(Message::user_text("new")),
-        ];
-        assert_eq!(
-            user_entry_ids(&branch[..2], &more),
-            [None, None, Some("u1".to_string())]
-        );
     }
 }
