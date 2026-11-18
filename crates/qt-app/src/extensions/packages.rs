@@ -111,7 +111,8 @@ impl Render for PackagesPanel {
         let mut list = v_flex()
             .id("package-resources")
             .gap_0p5()
-            .max_h(px(420.))
+            .flex_1()
+            .min_h(px(120.))
             .overflow_y_scroll();
         if let Some(error) = &self.error {
             list = list.child(
@@ -172,6 +173,7 @@ impl Render for PackagesPanel {
             );
         }
         v_flex()
+            .size_full()
             .gap_2()
             .child(Input::new(&self.filter).small())
             .child(list)
@@ -190,6 +192,7 @@ impl Render for PackagesPanel {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child("Package resources are toggled in the package's user or project settings; other resources are read-only here."),
@@ -225,12 +228,9 @@ pub fn open_packages(
     cx: &mut App,
 ) {
     let panel = cx.new(|cx| PackagesPanel::new(runtime, chrome, kind, filter, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title(kind_title(kind))
-            .w(px(760.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title(kind_title(kind)), window, 760., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
 

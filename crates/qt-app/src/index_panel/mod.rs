@@ -56,13 +56,28 @@ pub fn visible_lines(lines: &[String]) -> Vec<String> {
     out
 }
 
+/// How an [`output_view`] takes vertical space in a panel whose root is
+/// `size_full()`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OutputSize {
+    /// The output is the panel's main area: it fills the free space (at
+    /// least [`OUTPUT_MIN_HEIGHT`]).
+    Fill,
+    /// The output sits under the panel's main area: as tall as its content,
+    /// at most this share of the panel height.
+    Share(f32),
+}
+
+/// Smallest height of a filling output view.
+pub const OUTPUT_MIN_HEIGHT: f32 = 120.;
+
 /// A scrollable monospace output area with an optional busy row.
 pub fn output_view(
     id: &'static str,
     lines: &[String],
     error: bool,
     busy: Option<&str>,
-    max_height: f32,
+    size: OutputSize,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -77,7 +92,10 @@ pub fn output_view(
         .rounded_md()
         .border_1()
         .border_color(theme.border)
-        .max_h(px(max_height))
+        .map(|el| match size {
+            OutputSize::Fill => el.flex_1().min_h(px(OUTPUT_MIN_HEIGHT)),
+            OutputSize::Share(share) => el.flex_shrink_1().min_h_0().max_h(relative(share)),
+        })
         .overflow_y_scroll()
         .when_some(busy.map(str::to_string), |el, label| {
             el.child(
@@ -607,7 +625,13 @@ impl Render for IndexPanel {
                     .on_click(cx.listener(|this, _, w, cx| this.run_query(w, cx))),
             );
 
-        v_flex()
+        // The status and query form keep their height and scroll when the
+        // window is short; the output fills the rest.
+        let top = v_flex()
+            .id("index-form")
+            .flex_shrink_1()
+            .min_h_0()
+            .overflow_y_scroll()
             .gap_3()
             .child(section("STATUS", cx))
             .child(status)
@@ -615,27 +639,24 @@ impl Render for IndexPanel {
             .child(section("QUERY", cx))
             .child(modes)
             .child(form)
-            .child(run_row)
-            .child(output_view(
-                "index-output",
-                &self.output,
-                self.error,
-                self.busy.as_deref(),
-                320.,
-                cx,
-            ))
+            .child(run_row);
+        v_flex().size_full().gap_3().child(top).child(output_view(
+            "index-output",
+            &self.output,
+            self.error,
+            self.busy.as_deref(),
+            OutputSize::Fill,
+            cx,
+        ))
     }
 }
 
 /// Open the `/index` panel.
 pub fn open(runtime: Runtime, hooks: PanelHooks, window: &mut Window, cx: &mut App) {
     let panel = cx.new(|cx| IndexPanel::new(runtime, hooks, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Project index")
-            .w(px(820.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("Project index"), window, 820., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
 

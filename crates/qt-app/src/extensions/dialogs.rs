@@ -40,6 +40,13 @@ pub fn seconds_left(deadline: Instant, now: Instant) -> u64 {
     left.as_secs() + u64::from(left.subsec_nanos() > 0)
 }
 
+/// Height of a select dialog's option list in a window whose viewport is
+/// `viewport_height` tall: what is left after the dialog chrome (title,
+/// buttons, margins), at least a few rows.
+pub fn select_list_height(viewport_height: f32) -> f32 {
+    (viewport_height - 260.).max(120.)
+}
+
 /// One open extension dialog.
 pub struct ExtDialog {
     title: String,
@@ -190,7 +197,7 @@ impl ExtDialog {
 }
 
 impl Render for ExtDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let countdown = self
             .deadline
@@ -211,7 +218,9 @@ impl Render for ExtDialog {
                 let mut list = v_flex()
                     .id("ext-select-list")
                     .gap_0p5()
-                    .max_h(px(360.))
+                    .max_h(px(select_list_height(f32::from(
+                        window.viewport_size().height,
+                    ))))
                     .overflow_y_scroll();
                 for (i, option) in options.iter().enumerate() {
                     let selected = i == self.selected;
@@ -316,11 +325,15 @@ pub fn open_dialog(request: DialogRequest, window: &mut Window, cx: &mut App) ->
     view
 }
 
-/// Terminal-like rendering of component lines.
-fn lines_view(lines: &[String], cx: &App) -> Div {
+/// Terminal-like rendering of component lines; lines wider than the
+/// dialog scroll sideways instead of overflowing it.
+fn lines_view(id: &'static str, lines: &[String], cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
     v_flex()
+        .id(id)
         .w_full()
+        .min_w_0()
+        .overflow_x_scroll()
         .p_2()
         .rounded_md()
         .bg(theme.muted.opacity(0.4))
@@ -385,7 +398,7 @@ impl Render for ComponentView {
                     .text_color(muted)
                     .child(format!("{} · keys go to the extension", self.title)),
             )
-            .child(lines_view(&self.lines, cx))
+            .child(lines_view("ext-component-lines", &self.lines, cx))
             .child(
                 h_flex().justify_end().child(
                     Button::new("ext-component-close")
@@ -415,9 +428,11 @@ pub fn open_component(
     });
     let focus = view.read(cx).focus.clone();
     let content = view.clone();
+    // Wide enough for a full `COMPONENT_COLUMNS` frame; the dialog clamps
+    // this to the window and narrower windows scroll the lines sideways.
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
-            .w(px(760.))
+            .w(px(900.))
             .keyboard(false)
             .on_ok(|_, _, _| false)
             .child(content.clone())
@@ -505,7 +520,7 @@ impl Render for EditorComponentView {
             .rounded_md()
             .border_1()
             .border_color(if focused { theme.ring } else { theme.border })
-            .child(lines_view(&self.lines, cx))
+            .child(lines_view("ext-editor-component-lines", &self.lines, cx))
             .when_some(self.error.clone(), |el, e| {
                 el.child(div().text_xs().text_color(theme.danger).child(e))
             })
@@ -517,7 +532,7 @@ pub const DIALOG_POLL: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 mod tests {
-    use super::seconds_left;
+    use super::{seconds_left, select_list_height};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -526,5 +541,12 @@ mod tests {
         assert_eq!(seconds_left(now + Duration::from_millis(1500), now), 2);
         assert_eq!(seconds_left(now + Duration::from_secs(3), now), 3);
         assert_eq!(seconds_left(now, now + Duration::from_secs(1)), 0);
+    }
+
+    #[test]
+    fn select_list_grows_with_the_window() {
+        assert_eq!(select_list_height(1400.), 1140.);
+        assert_eq!(select_list_height(600.), 340.);
+        assert_eq!(select_list_height(200.), 120.);
     }
 }

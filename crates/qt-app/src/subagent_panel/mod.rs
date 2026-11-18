@@ -22,7 +22,7 @@ use qt_runtime::qt_subagents::definitions::{SubagentDefinition, discover_subagen
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::index_panel::{PanelHooks, output_view, section};
+use crate::index_panel::{OutputSize, PanelHooks, output_view, section};
 
 /// One persistent worker row.
 #[derive(Debug, Clone, PartialEq)]
@@ -331,7 +331,7 @@ impl Render for SubagentPanel {
         let theme = cx.theme().clone();
         let busy = self.busy.is_some();
 
-        let mut scopes = h_flex().gap_1();
+        let mut scopes = h_flex().gap_1().flex_wrap();
         for scope in SCOPES {
             let selected = self.scope == scope;
             scopes = scopes.child(
@@ -350,7 +350,8 @@ impl Render for SubagentPanel {
         let mut roles = v_flex()
             .id("subagent-roles")
             .gap_0p5()
-            .max_h(px(300.))
+            .flex_1()
+            .min_h(px(100.))
             .overflow_y_scroll();
         if self.agents.is_empty() {
             roles = roles.child(
@@ -389,8 +390,11 @@ impl Render for SubagentPanel {
             );
         }
         let left = v_flex()
+            .id("subagent-left")
             .w(px(250.))
             .flex_none()
+            .h_full()
+            .overflow_y_scroll()
             .gap_2()
             .child(section("ROLES", cx))
             .child(scopes)
@@ -444,7 +448,13 @@ impl Render for SubagentPanel {
                     ),
             );
 
-        let mut right = v_flex().flex_1().min_w_0().gap_2();
+        let mut right = v_flex()
+            .id("subagent-right")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .gap_2();
         if let Some(agent) = self.current().cloned() {
             right = right
                 .children(definition_lines(&agent).into_iter().map(|l| {
@@ -510,7 +520,8 @@ impl Render for SubagentPanel {
         let mut workers = v_flex()
             .id("subagent-workers")
             .gap_0p5()
-            .max_h(px(180.))
+            .flex_1()
+            .min_h(px(100.))
             .overflow_y_scroll();
         if self.workers.is_empty() {
             workers = workers.child(
@@ -585,14 +596,23 @@ impl Render for SubagentPanel {
             }
         });
         v_flex()
+            .size_full()
             .gap_3()
-            .child(h_flex().gap_4().items_start().child(left).child(right))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h(px(160.))
+                    .gap_4()
+                    .items_stretch()
+                    .child(left)
+                    .child(right),
+            )
             .child(output_view(
                 "subagent-output",
                 &self.output,
                 self.error,
                 busy_label.as_deref(),
-                260.,
+                OutputSize::Share(0.35),
                 cx,
             ))
     }
@@ -601,12 +621,14 @@ impl Render for SubagentPanel {
 /// Open the `/subagent` menu.
 pub fn open(runtime: Runtime, hooks: PanelHooks, window: &mut Window, cx: &mut App) {
     let panel = cx.new(|cx| SubagentPanel::new(runtime, hooks, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Subagents · user + builtins")
-            .w(px(900.))
-            .on_ok(|_, _, _| false)
-            .child(panel.clone())
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(
+            dialog.title("Subagents · user + builtins"),
+            window,
+            900.,
+            panel.clone(),
+        )
+        .on_ok(|_, _, _| false)
     });
 }
 
