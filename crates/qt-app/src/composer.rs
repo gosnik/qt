@@ -35,7 +35,7 @@ impl Attachment {
             bail!("not a supported image (PNG, JPEG, GIF, WebP or BMP)");
         };
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let (block, note) = prepare_image(&data, format.mime_type(), auto_resize);
+        let (block, note) = prepare_image(&data, format.mime_type(), auto_resize)?;
         let ContentBlock::Image { data, mime_type } = block else {
             bail!("image preparation returned no image");
         };
@@ -71,8 +71,7 @@ impl Attachment {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        Self::from_bytes(name, &bytes, auto_resize)
-            .with_context(|| format!("{} is not an image", path.display()))
+        Self::from_bytes(name, &bytes, auto_resize).with_context(|| path.display().to_string())
     }
 
     pub fn block(&self) -> ContentBlock {
@@ -220,6 +219,17 @@ mod tests {
         assert!(kept.note.is_none());
 
         assert!(Attachment::from_bytes("x.txt", b"hello", true).is_err());
+
+        // BMP (e.g. from an X11 clipboard) is sent as PNG, which providers accept.
+        let mut bmp = std::io::Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(RgbImage::from_pixel(12, 8, image::Rgb([1, 2, 3])))
+            .write_to(&mut bmp, ImageFormat::Bmp)
+            .unwrap();
+        for auto_resize in [true, false] {
+            let a = Attachment::from_bytes("clip", bmp.get_ref(), auto_resize).unwrap();
+            assert_eq!(a.mime_type, "image/png");
+            assert_eq!((a.width, a.height), (12, 8));
+        }
     }
 
     #[test]

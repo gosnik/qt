@@ -480,7 +480,7 @@ pub(crate) async fn stream(
     on_event: &mut (dyn FnMut(StreamEvent) + Send),
 ) -> Result<()> {
     if provider.api_key.is_none() && !provider.local {
-        bail!("No API key configured for {}", provider.label);
+        bail!(crate::auth::missing_credential_message(&provider.id));
     }
     let built = build_request(provider, model, request)?;
     let body = serde_json::to_vec(&built.body)?;
@@ -1014,5 +1014,118 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].path, "/v1/messages");
         assert_eq!(requests[1].headers["x-api-key"], "k");
+    }
+
+    #[tokio::test]
+    async fn expired_oauth_token_is_refreshed_persisted_and_sent() {
+        let sse = [
+            r#"{"type":"message_start","message":{"id":"m1","usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+            r#"{"type":"message_stop"}"#,
+        ]
+        .iter()
+        .map(|e| format!("event: x\ndata: {e}\n\n"))
+        .collect::<String>();
+        let (api_base, api_requests) = serve(vec![MockResponse::sse(sse)]).await;
+        let (token_base, token_requests) = serve(vec![MockResponse::json(
+            200,
+            r#"{"access_token":"sk-ant-oat01-new","refresh_token":"ref-2","expires_in":3600}"#,
+        )])
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let auth_path = dir.path().join("auth.json");
+        let expired = crate::auth::OAuthCredentials {
+            access: "sk-ant-oat01-old".into(),
+            refresh: "ref-1".into(),
+            expires: 1,
+            ..Default::default()
+        };
+        let mut store = crate::auth::AuthStore::default();
+        store.set_oauth("anthropic", &expired);
+        store.set_api_key("openai", "sk-keep");
+        store.save_to(&auth_path).unwrap();
+
+        let mut p = provider("sk-ant-oat01-old");
+        p.base_url = api_base.clone();
+        p.models = std::sync::Arc::new(vec![ModelSpec {
+            base_url: api_base,
+            ..model("claude-haiku-4-5")
+        }]);
+        p.oauth = Some(crate::provider::OAuthBinding {
+            credentials: expired,
+            auth_path: Some(auth_path.clone()),
+            token_url: Some(format!("{token_base}/v1/oauth/token")),
+        });
+        let request = Request {
+            model: "claude-haiku-4-5".into(),
+            messages: vec![Message::user_text("hi")],
+            ..Default::default()
+        };
+        let msg = crate::provider::stream(
+            &reqwest::Client::new(),
+            &p,
+            &request,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await;
+        assert_eq!(msg.error_message, None);
+        assert_eq!(msg.text(), "ok");
+        {
+            let tokens = token_requests.lock().unwrap();
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(tokens[0].path, "/v1/oauth/token");
+            let body = tokens[0].json();
+            assert_eq!(body["grant_type"], "refresh_token");
+            assert_eq!(body["refresh_token"], "ref-1");
+            assert_eq!(body["client_id"], crate::auth::oauth::ANTHROPIC_CLIENT_ID);
+        }
+        assert_eq!(
+            api_requests.lock().unwrap()[0].headers["authorization"],
+            "Bearer sk-ant-oat01-new"
+        );
+        let stored = crate::auth::AuthStore::load_path(&auth_path).unwrap();
+        let Some(crate::auth::Credential::OAuth(c)) = stored.credential("anthropic") else {
+            panic!("refreshed credentials not stored")
+        };
+        assert_eq!(
+            (c.access.as_str(), c.refresh.as_str()),
+            ("sk-ant-oat01-new", "ref-2")
+        );
+        assert!(c.expires > crate::message::now_millis());
+        assert_eq!(stored.stored_api_key("openai").as_deref(), Some("sk-keep"));
+
+        // A failed refresh becomes the assistant error and leaves the file alone.
+        let (token_base, _) = serve(vec![MockResponse::json(
+            400,
+            r#"{"error":"invalid_grant"}"#,
+        )])
+        .await;
+        let mut p2 = p.clone();
+        p2.oauth = Some(crate::provider::OAuthBinding {
+            credentials: crate::auth::OAuthCredentials {
+                access: "a".into(),
+                refresh: "bad".into(),
+                expires: 1,
+                ..Default::default()
+            },
+            auth_path: None,
+            token_url: Some(format!("{token_base}/t")),
+        });
+        let msg = crate::provider::stream(
+            &reqwest::Client::new(),
+            &p2,
+            &request,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await;
+        let err = msg.error_message.unwrap_or_default();
+        assert!(
+            err.contains("refreshing the anthropic OAuth token"),
+            "{err}"
+        );
     }
 }

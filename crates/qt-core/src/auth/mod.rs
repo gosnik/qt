@@ -129,6 +129,9 @@ pub struct AuthStore {
     /// Provider entries changed since load; only these are written back so
     /// tokens refreshed by another session or process are not overwritten.
     dirty: std::collections::BTreeSet<String>,
+    /// `--api-key` overrides held in memory only; they take precedence over
+    /// stored credentials and are never written (archived qt `runtime_api_key`).
+    runtime: std::collections::BTreeMap<String, String>,
 }
 
 fn trimmed(value: Option<&Value>) -> Option<String> {
@@ -180,6 +183,7 @@ impl AuthStore {
             raw,
             path: Some(path.to_path_buf()),
             dirty: Default::default(),
+            runtime: Default::default(),
         })
     }
 
@@ -266,6 +270,21 @@ impl AuthStore {
 
     /// The stored credential for `provider` (API key, token or OAuth).
     pub fn credential(&self, provider: &str) -> Option<Credential> {
+        if let Some(key) = self.runtime_api_key(provider) {
+            return Some(Credential::ApiKey(key.to_string()));
+        }
+        self.stored_credential(provider)
+    }
+
+    /// The `--api-key` override for `provider`, if one is set.
+    pub fn runtime_api_key(&self, provider: &str) -> Option<&str> {
+        self.runtime
+            .get(&provider.trim().to_lowercase())
+            .map(String::as_str)
+    }
+
+    /// The credential stored in `auth.json`, ignoring `--api-key`.
+    pub fn stored_credential(&self, provider: &str) -> Option<Credential> {
         let entry = self.entry(provider)?;
         let token = trimmed(entry.get("token"));
         if let Some(metadata) = entry.get("metadata")
@@ -289,13 +308,15 @@ impl AuthStore {
 
     /// Stored secret for `provider`, falling back to its environment variables.
     pub fn api_key(&self, provider: &str) -> Option<String> {
-        self.stored_api_key(provider)
+        self.credential(provider)
+            .map(|c| c.secret().to_string())
             .or_else(|| env_api_key(provider))
     }
 
-    /// Stored secret (API key, token or OAuth access token).
+    /// Stored secret (API key, token or OAuth access token); `--api-key` is not stored.
     pub fn stored_api_key(&self, provider: &str) -> Option<String> {
-        self.credential(provider).map(|c| c.secret().to_string())
+        self.stored_credential(provider)
+            .map(|c| c.secret().to_string())
     }
 
     pub fn set_api_key(&mut self, provider: &str, key: &str) {
@@ -303,13 +324,14 @@ impl AuthStore {
             .insert("apiKey".into(), json!(key.trim()));
     }
 
-    /// Use `key` for `provider` without marking it for saving (`--api-key`):
-    /// [`Self::save`] keeps the file's entry for this provider.
+    /// Use `key` for `provider` in this process only (`--api-key`). It wins
+    /// over any stored API key or OAuth login and is never saved.
     pub fn set_transient_api_key(&mut self, provider: &str, key: &str) {
-        let was_dirty = self.dirty.contains(provider);
-        self.set_api_key(provider, key);
-        if !was_dirty {
-            self.dirty.remove(provider);
+        let id = provider.trim().to_lowercase();
+        if key.trim().is_empty() {
+            self.runtime.remove(&id);
+        } else {
+            self.runtime.insert(id, key.trim().to_string());
         }
     }
 
@@ -577,9 +599,11 @@ pub async fn fresh_access_token(
             "OAuth credentials for {provider} have expired and have no refresh token; run /login {provider}"
         ));
     }
-    let refreshed = oauth::refresh_token(http, provider, &current.refresh)
-        .await
-        .with_context(|| format!("refreshing the {provider} OAuth token"))?;
+    let refreshed = match &binding.token_url {
+        Some(url) => oauth::refresh_with(http, provider, &current.refresh, url).await,
+        None => oauth::refresh_token(http, provider, &current.refresh).await,
+    }
+    .with_context(|| format!("refreshing the {provider} OAuth token"))?;
     let refreshed = OAuthCredentials {
         extra: current.extra.clone(),
         account_id: refreshed.account_id.clone().or(current.account_id.clone()),
@@ -734,6 +758,59 @@ mod tests {
     }
 
     #[test]
+    fn runtime_api_key_overrides_oauth_and_is_never_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let mut store = AuthStore::default();
+        let creds = OAuthCredentials {
+            access: "sk-ant-oat-1".into(),
+            refresh: "r".into(),
+            expires: 99,
+            ..Default::default()
+        };
+        store.set_oauth("anthropic", &creds);
+        store.save_to(&path).unwrap();
+
+        let mut store = AuthStore::load_path(&path).unwrap();
+        store.set_transient_api_key("Anthropic", " sk-cli ");
+        assert_eq!(
+            store.credential("anthropic"),
+            Some(Credential::ApiKey("sk-cli".into()))
+        );
+        assert_eq!(store.api_key("anthropic").as_deref(), Some("sk-cli"));
+        assert_eq!(store.runtime_api_key("anthropic"), Some("sk-cli"));
+        // The stored login is untouched and still reported as stored.
+        assert_eq!(
+            store.stored_credential("anthropic"),
+            Some(Credential::OAuth(creds.clone()))
+        );
+        assert_eq!(
+            store.stored_api_key("anthropic").as_deref(),
+            Some("sk-ant-oat-1")
+        );
+        // Saving after another change never writes the runtime key.
+        store.set_api_key("openai", "sk-o");
+        store.save_to(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sk-cli"), "{text}");
+        let reloaded = AuthStore::load_path(&path).unwrap();
+        assert_eq!(
+            reloaded.credential("anthropic"),
+            Some(Credential::OAuth(creds))
+        );
+        // A runtime key for a provider with nothing stored.
+        let mut store = AuthStore::default();
+        store.set_transient_api_key("groq", "gk");
+        assert_eq!(
+            store.credential("groq"),
+            Some(Credential::ApiKey("gk".into()))
+        );
+        assert!(store.stored_api_key("groq").is_none());
+        store.set_transient_api_key("groq", "");
+        assert!(store.credential("groq").is_none());
+    }
+
+    #[test]
     fn env_table_and_messages() {
         assert_eq!(
             env_var_names("anthropic"),
@@ -773,6 +850,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn codex_login_is_stored_and_configures_the_provider() {
+        use crate::provider::test_server::{MockResponse, serve};
+        let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let jwt = format!(
+            "h.{}.s",
+            engine.encode(r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-9"}}"#)
+        );
+        let (token_base, requests) = serve(vec![MockResponse::json(
+            200,
+            json!({"access_token": jwt, "refresh_token": "rt", "expires_in": 3600}).to_string(),
+        )])
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentHome::new(dir.path());
+        // An existing API key for another provider survives the login.
+        let mut store = AuthStore::default();
+        store.set_api_key("openai", "sk-o");
+        store.save(&home).unwrap();
+
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let (url_tx, url_rx) = async_channel::bounded::<oauth::AuthInfo>(1);
+        let mut options = oauth::LoginOptions::new(move |info| {
+            let _ = url_tx.try_send(info);
+        });
+        options.endpoints = Some(oauth::Endpoints {
+            authorize_url: "http://127.0.0.1:9/oauth/authorize".into(),
+            token_url: format!("{token_base}/oauth/token"),
+            callback_host: "127.0.0.1".into(),
+            callback_port: port,
+            callback_path: "/auth/callback".into(),
+            redirect_uri: format!("http://localhost:{port}/auth/callback"),
+        });
+        let http = reqwest::Client::new();
+        let task_home = home.clone();
+        let task_http = http.clone();
+        let task = tokio::spawn(async move {
+            login_and_store(&task_http, &task_home, "openai-codex", options).await
+        });
+        let info = url_rx.recv().await.unwrap();
+        let url = reqwest::Url::parse(&info.url).unwrap();
+        let state = url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .unwrap()
+            .1
+            .into_owned();
+        // The browser redirect lands on the localhost callback server.
+        let page = http
+            .get(format!(
+                "http://127.0.0.1:{port}/auth/callback?code=cb-code&state={state}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status().as_u16(), 200);
+        task.await.unwrap().unwrap();
+        assert!(requests.lock().unwrap()[0].body.contains("code=cb-code"));
+
+        let store = AuthStore::load(&home).unwrap();
+        assert_eq!(store.stored_api_key("openai").as_deref(), Some("sk-o"));
+        let Some(Credential::OAuth(c)) = store.credential("openai-codex") else {
+            panic!("login not stored")
+        };
+        assert_eq!(c.account_id.as_deref(), Some("acct-9"));
+        assert_eq!(c.refresh, "rt");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(home.auth_path())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let settings = crate::config::Settings::load(&home).unwrap();
+        let codex = crate::provider::configured_providers(&settings, &store)
+            .into_iter()
+            .find(|p| p.id == "openai-codex")
+            .unwrap();
+        assert!(codex.is_ready());
+        assert_eq!(codex.oauth.unwrap().credentials.access, c.access);
+
+        assert!(logout(&home, "openai-codex").unwrap());
+        assert!(!logout(&home, "openai-codex").unwrap());
+        let store = AuthStore::load(&home).unwrap();
+        assert!(store.credential("openai-codex").is_none());
+        assert_eq!(store.stored_api_key("openai").as_deref(), Some("sk-o"));
+    }
+
+    #[tokio::test]
     async fn fresh_tokens_are_reused_and_newer_stored_tokens_win() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
@@ -786,6 +956,7 @@ mod tests {
         let binding = crate::provider::OAuthBinding {
             credentials: valid.clone(),
             auth_path: Some(path.clone()),
+            token_url: None,
         };
         assert_eq!(
             fresh_access_token(&http, "anthropic", &binding)
@@ -810,6 +981,7 @@ mod tests {
                 ..valid
             },
             auth_path: Some(path),
+            token_url: None,
         };
         assert_eq!(
             fresh_access_token(&http, "anthropic", &stale)
@@ -825,6 +997,7 @@ mod tests {
                 ..Default::default()
             },
             auth_path: None,
+            token_url: None,
         };
         let err = fresh_access_token(&http, "openai-codex", &no_refresh)
             .await

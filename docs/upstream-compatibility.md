@@ -16,7 +16,9 @@ archived C++ qt (`archived/`).
   store, so a token refreshed by another session is not overwritten. Environment variables
   follow Pi's table (`ANTHROPIC_OAUTH_TOKEN` before `ANTHROPIC_API_KEY`, `ZAI_API_KEY`,
   `CLOUDFLARE_API_KEY`, ... for every catalog provider); ambient Vertex/Bedrock credentials
-  resolve to `<authenticated>`. Missing-key messages use the archived wording.
+  resolve to `<authenticated>`. Missing-key messages use the archived wording
+  (`No API key found for anthropic. set ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY, or run
+  /login anthropic.`) when a prompt is sent to a provider without credentials.
 - **OAuth:** PKCE logins with the Pi client ids, scopes, callback ports (53692 for Anthropic,
   1455 for OpenAI Codex), `PI_OAUTH_CALLBACK_HOST`, pasted-code fallback and token
   exchange/refresh bodies. Anthropic expiry keeps Pi's 5 minute margin. Tokens are refreshed
@@ -835,8 +837,11 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
     messages it runs them as in print mode. `--resume` shows a numbered picker on the
     terminal; without a terminal it resumes the most recent session (this folder first), as
     the archived binary did. An ambiguous `--session` / `--fork` id prefix prints
-    `Error: Session prefix '…' is ambiguous; matches: …` (archived). `--version` prints the crate version (the archived binary printed `0.0.0`).
-  - `--api-key` is held in memory for the run and never written to `auth.json`.
+    `Error: Session prefix '…' is ambiguous; matches: …` (archived). `--version` prints the
+    crate version (the archived binary printed `0.0.0`).
+  - `--api-key` is held in memory for the run and never written to `auth.json`. As in the
+    archived qt it wins over a stored API key or OAuth login for that provider (`/status`
+    shows `CLI --api-key`).
   - A value after a boolean extension flag (`--plan task`) is kept as a message (the
     archived parser assigned it to the flag and failed).
   - `--list-models` also lists models discovered live from ready providers (Ollama, OpenAI,
@@ -990,7 +995,9 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   current level (upwards first, Pi).
 - **Composer:** clipboard images and dropped image files become attachments (chips with
   size and dimensions) prepared with `images.autoResize`; Pi's resize note is appended to the
-  prompt text. Dropped non-image files insert their paths. Ctrl+G edits the draft in
+  prompt text. Formats providers do not accept (BMP, e.g. from an X11 clipboard) are converted
+  to PNG (Pi `convertToPng`); an image that cannot be decoded, or cannot be fitted to the
+  resize limits, is refused with a notification instead of being sent. Dropped non-image files insert their paths. Ctrl+G edits the draft in
   `$VISUAL`/`$EDITOR` (Pi's "No editor configured" message; one trailing newline removed);
   GUI editors need a blocking flag such as `code --wait`.
 - **Slash commands:** typing `/` at the start of the composer opens the archived autocomplete

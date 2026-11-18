@@ -817,10 +817,13 @@ impl Engine {
     }
 
     /// Where `provider`'s credential comes from, as `/status` shows it
-    /// (`auth.json api key`, `auth.json token`, an environment variable,
+    /// (`CLI --api-key`, `auth.json api key`, `auth.json token`, an environment variable,
     /// `key in models.json`, `command in models.json`, `unconfigured`).
     pub fn auth_status_label(&self, provider: &str) -> String {
         let auth = self.inner.auth.read().expect("auth lock");
+        if auth.runtime_api_key(provider).is_some() {
+            return "CLI --api-key".into();
+        }
         match auth.credential(provider) {
             Some(crate::auth::Credential::ApiKey(_)) => return "auth.json api key".into(),
             Some(crate::auth::Credential::OAuth(_)) => return "auth.json token".into(),
@@ -2016,7 +2019,7 @@ impl Conversation {
             .provider(&model.provider)
             .with_context(|| format!("Unknown provider {}", model.provider))?;
         if !provider.is_ready() {
-            bail!("No API key configured for {}", provider.label);
+            bail!(crate::auth::missing_credential_message(&provider.id));
         }
         Ok(provider)
     }
