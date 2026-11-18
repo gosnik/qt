@@ -1373,10 +1373,22 @@ pub fn landing_lines(inbox: &ReviewInbox, now: Millis) -> Result<Vec<String>> {
         kinds: DREAM_KINDS.iter().map(|kind| kind.to_string()).collect(),
         statuses: StatusFilter::All.statuses(),
         include_due_deferred: false,
-        limit: 1,
+        limit: 1000,
         ..Default::default()
     };
-    let latest = inbox.review_items(&dream_query)?;
+    // The newest Dream review by creation time (the archived landing took the
+    // first item in queue order, which could name an older decided review
+    // while a newer one was pending).
+    let dreams = inbox.review_items(&dream_query)?;
+    let latest: Vec<&ReviewItem> = dreams
+        .iter()
+        .max_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        })
+        .into_iter()
+        .collect();
     let mut lines = vec![
         "Memory Review Inbox".to_string(),
         format!("Scope: {}", scope_label(&inbox.scope())),

@@ -348,3 +348,49 @@ fn dashboard_operations() {
     assert!(dashboard::system_lines(&runtime)[1].starts_with("Schema version: "));
     assert!(dashboard::retrieval_lines(&runtime)[0].starts_with("Retrieval: "));
 }
+
+#[test]
+fn review_inbox_landing_names_the_newest_dream_review() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let runtime = runtime(home.path(), cwd.path());
+    let add = |priority: &str, subject: &str| {
+        runtime
+            .store()
+            .add_review(
+                &runtime.scope(),
+                ReviewItemWrite {
+                    kind: "dream_artifact".into(),
+                    priority: priority.into(),
+                    reason: "dream output is isolated from trusted recall".into(),
+                    subject_id: subject.into(),
+                    candidate_json: "{}".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+    };
+    let first = remember(&runtime, "older dream", MemoryStatus::Hypothesis);
+    let older = add("high", &first);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let second = remember(&runtime, "newer dream", MemoryStatus::Hypothesis);
+    let newer = add("low", &second);
+    let queue = runtime
+        .reviews()
+        .review_items(&ReviewQuery {
+            kinds: vec!["dream_artifact".into()],
+            limit: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(queue[0].id, older, "queue order ranks the older item first");
+    let landing = inbox_view::landing_lines(runtime.reviews(), now_ms()).unwrap();
+    let line = landing
+        .iter()
+        .find(|line| line.starts_with("Latest Dreaming: "))
+        .unwrap();
+    assert!(
+        line.starts_with(&format!("Latest Dreaming: dream_artifact {newer} (")),
+        "{line}"
+    );
+}

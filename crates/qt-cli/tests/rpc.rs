@@ -947,6 +947,72 @@ fn auto_retry_and_extension_hook_errors_are_streamed() {
 }
 
 #[test]
+fn memory_dream_run_is_processed_while_rpc_runs() {
+    let server = MockServer::start(Arc::new(|_| text_reply("not a dream artifact")));
+    let env = env_with(
+        server.port,
+        json!({"memory": {
+            "enabled": true,
+            "dreaming": {
+                "enabled": true,
+                "trigger": "interval",
+                "intervalSeconds": 31_536_000,
+                "idleSeconds": 1,
+                "model": "ollama:mock/m",
+            },
+        }}),
+    );
+    let mut rpc = Rpc::start(&env, &["--no-session"]);
+    // Captured candidates land in the durable repository scope Dreaming
+    // samples from.
+    rpc.prompt(
+        "Decision: deploys always use blue-green switching.
+Correction: rollbacks must restore the previous colour.",
+    );
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let status = rpc.call(json!({"type": "memory", "action": "status"}));
+        if status["statistics"]["catalog"]["total"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 2
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "capture never stored candidates: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let queued = rpc.call(json!({"type": "memory", "action": "dream",
+                                 "params": {"operation": "run"}}));
+    assert_eq!(queued["queued"], true);
+    // The archived RPC runtime ran queued cycles in its memory worker; the
+    // cycle must leave the queue (here it fails on the non-JSON child reply).
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        let status = rpc.call(json!({"type": "memory", "action": "dream",
+                                     "params": {"operation": "status"}}));
+        let finished =
+            status["completed"].as_u64().unwrap_or(0) + status["failed"].as_u64().unwrap_or(0);
+        if status["pending"] == 0 && status["running"] == false && finished == 1 {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "dream cycle never ran: {status}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let dreamed = server.requests().iter().any(|request| {
+        request["messages"][0]["content"]
+            .as_str()
+            .is_some_and(|system| system.contains("isolated memory Dreaming analyst"))
+    });
+    assert!(dreamed, "the Dreaming child called the model: {status}");
+    assert_eq!(status["failed"], 1, "the reply is not a Dreaming artifact");
+    assert!(rpc.close().success());
+}
+
+#[test]
 fn file_arguments_are_rejected() {
     let env = env(1);
     std::fs::write(env.work.join("notes.txt"), "x").unwrap();

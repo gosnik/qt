@@ -338,7 +338,7 @@ pub fn memory_runtime_options(
             embedder: inputs.embedder.clone(),
         },
         background_processing: inputs.background_processing,
-        allow_dream_promotion: settings.dreaming.promotion_policy == "auto_validate",
+        allow_dream_promotion: settings.dreaming.promotion_policy != "disabled",
         runner: inputs.child_executable.clone().map(|exe| {
             Arc::new(ProcessAgentRunner::new(exe))
                 as Arc<dyn qt_memory::isolated::IsolatedAgentRunner>
@@ -747,6 +747,19 @@ mod tests {
         assert_eq!(options.consolidation_model, "llama/b");
         assert_eq!(options.consolidation_timeout_ms, 600_000);
         assert!(options.runner.is_some());
+        // Archived review governance: Dream hypotheses may be promoted
+        // unless `promotionPolicy` is `disabled` (default `review_only`).
+        assert!(options.allow_dream_promotion);
+        for (policy, allowed) in [
+            ("review_only", true),
+            ("manual", true),
+            ("auto_validate", true),
+            ("disabled", false),
+        ] {
+            settings.dreaming.promotion_policy = policy.into();
+            let options = memory_runtime_options(&settings, &MemoryInputs::default());
+            assert_eq!(options.allow_dream_promotion, allowed, "{policy}");
+        }
     }
 
     #[test]
