@@ -1059,6 +1059,11 @@ The archived `rpc_protocol.cpp`, `rpc_server.cpp` and `rpc_mode.cpp` and Pi's
 
 The archived interactive (TUI) features are GPUI views; terminal rendering itself is out of scope.
 
+- **Window frame:** GPUI asks Linux compositors for server-side decorations. Where only
+  client-side decorations exist (GNOME on Wayland), the main window and the memory dashboard
+  draw gpui-component's title bar (title, drag to move, double-click to maximise, minimise /
+  maximise / close) above their content; resize edges come from `Root`. X11 window managers,
+  KDE, macOS and Windows keep their native frames (`crates/qt-app/src/window_frame.rs`).
 - **Themes:** Pi JSON themes (built-in `dark`/`light` and files from `<agent home>/themes`,
   `.pi/themes`, `.agents/themes`, `themeRoots`/`themes`) are selected by the `theme` settings
   key (project `.pi/settings.json` overrides global). Without it the legacy `gui.theme`

@@ -1710,8 +1710,11 @@ pub fn open(host: MemoryHost, cx: &mut App) -> Result<()> {
         app_id: Some("qt".into()),
         ..Default::default()
     };
+    let title = format!("qt memory — {project}");
     let (handle, _) = gpui_kit::open_window(options, cx, move |window, cx| {
-        cx.new(|cx| MemoryDashboard::new(host, memory, window, cx))
+        crate::window_frame::framed(title, window, cx, |window, cx| {
+            cx.new(|cx| MemoryDashboard::new(host, memory, window, cx))
+        })
     })?;
     cx.set_global(DashboardWindow(handle));
     Ok(())

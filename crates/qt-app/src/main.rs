@@ -22,6 +22,7 @@ mod startup;
 mod subagent_panel;
 mod theme;
 mod transcript;
+mod window_frame;
 mod workspace;
 
 use std::time::Duration;
@@ -172,20 +173,23 @@ fn main() -> Result<()> {
             let engine = engine.clone();
             let startup = startup.clone();
             let initial = initial.clone();
+            let title = format!("qt — {project}");
             if let Err(err) = gpui_kit::open_window(options, cx, move |window, cx| {
                 let startup = startup.clone();
                 let initial = initial.clone();
-                cx.new(|cx| {
-                    let workspace = Workspace::new(engine, window, cx);
-                    cx.defer_in(window, move |this: &mut Workspace, window, cx| {
-                        this.apply_startup(startup, window, cx);
-                        // Command-line messages run like typed composer
-                        // lines (slash commands, `!` commands, prompts).
-                        if let Some(prompt) = initial {
-                            this.submit_startup_lines(prompt.into_lines(), window, cx);
-                        }
-                    });
-                    workspace
+                window_frame::framed(title, window, cx, |window, cx| {
+                    cx.new(|cx| {
+                        let workspace = Workspace::new(engine, window, cx);
+                        cx.defer_in(window, move |this: &mut Workspace, window, cx| {
+                            this.apply_startup(startup, window, cx);
+                            // Command-line messages run like typed composer
+                            // lines (slash commands, `!` commands, prompts).
+                            if let Some(prompt) = initial {
+                                this.submit_startup_lines(prompt.into_lines(), window, cx);
+                            }
+                        });
+                        workspace
+                    })
                 })
             }) {
                 eprintln!("qt: failed to open window: {err:#}");
