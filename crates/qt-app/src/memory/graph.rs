@@ -14,9 +14,12 @@ use qt_memory::views::dashboard::{GraphData, NodeLayout, fit_view};
 /// Called with the ID of a clicked node.
 pub type SelectNode = Rc<dyn Fn(String, &mut Window, &mut App)>;
 
-/// Canvas size in logical pixels.
-pub const WIDTH: f32 = 700.;
-pub const HEIGHT: f32 = 520.;
+/// Called with the canvas size (logical pixels) every time it is laid out;
+/// the canvas fills the space its parent gives it.
+pub type CanvasResized = Rc<dyn Fn((f32, f32), &mut Window, &mut App)>;
+
+/// Canvas size assumed until the canvas has been laid out once.
+pub const DEFAULT_SIZE: (f32, f32) = (700., 520.);
 
 /// Archived group palette.
 pub fn palette(index: usize) -> Hsla {
@@ -43,9 +46,9 @@ pub struct GraphView {
 }
 
 impl GraphView {
-    /// Fits the layout into the canvas.
-    pub fn fit(layout: &HashMap<String, NodeLayout>) -> Self {
-        let (zoom, pan_x, pan_y) = fit_view(layout, WIDTH, HEIGHT);
+    /// Fits the layout into a canvas of `size` (width, height).
+    pub fn fit(layout: &HashMap<String, NodeLayout>, size: (f32, f32)) -> Self {
+        let (zoom, pan_x, pan_y) = fit_view(layout, size.0, size.1);
         Self { zoom, pan_x, pan_y }
     }
 
@@ -53,10 +56,11 @@ impl GraphView {
         (x * self.zoom + self.pan_x, y * self.zoom + self.pan_y)
     }
 
-    /// Wheel zoom (archived: ±0.08 per notch, 0.25–2.5) around the centre.
-    pub fn zoom_by(&mut self, delta: f32) {
+    /// Wheel zoom (archived: ±0.08 per notch, 0.25–2.5) around the centre
+    /// of a canvas of `size` (width, height).
+    pub fn zoom_by(&mut self, delta: f32, size: (f32, f32)) {
         let next = (self.zoom + delta).clamp(0.25, 2.5);
-        let (cx, cy) = (WIDTH * 0.5, HEIGHT * 0.5);
+        let (cx, cy) = (size.0 * 0.5, size.1 * 0.5);
         let world_x = (cx - self.pan_x) / self.zoom;
         let world_y = (cy - self.pan_y) / self.zoom;
         self.zoom = next;
@@ -65,13 +69,16 @@ impl GraphView {
     }
 }
 
-/// The graph element. `on_select` receives a clicked node ID.
+/// The graph element. It fills its parent (give it a definite or flex
+/// height); `on_select` receives a clicked node ID and `on_resize` the
+/// laid-out canvas size.
 pub fn render(
     graph: &GraphData,
     layout: &HashMap<String, NodeLayout>,
     view: GraphView,
     selected: Option<&str>,
     on_select: SelectNode,
+    on_resize: CanvasResized,
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
@@ -90,7 +97,14 @@ pub fn render(
         })
         .collect();
     let edges = canvas(
-        move |_, _, _| segments,
+        move |bounds, window, cx| {
+            on_resize(
+                (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                window,
+                cx,
+            );
+            segments
+        },
         move |bounds, segments, window, _| {
             for (from, to, touches) in segments {
                 let mut builder = PathBuilder::stroke(px(if touches { 2.0 } else { 1.2 }));
@@ -109,8 +123,7 @@ pub fn render(
 
     let mut container = div()
         .relative()
-        .w(px(WIDTH))
-        .h(px(HEIGHT))
+        .size_full()
         .overflow_hidden()
         .rounded_lg()
         .border_1()
@@ -185,7 +198,7 @@ pub fn render(
 
 #[cfg(test)]
 mod tests {
-    use super::{GraphView, HEIGHT, WIDTH};
+    use super::{DEFAULT_SIZE, GraphView};
 
     #[test]
     fn zoom_keeps_the_centre_fixed() {
@@ -194,14 +207,15 @@ mod tests {
             pan_x: 10.0,
             pan_y: -20.0,
         };
+        let (width, height) = DEFAULT_SIZE;
         let centre = (
-            (WIDTH * 0.5 - view.pan_x) / view.zoom,
-            (HEIGHT * 0.5 - view.pan_y) / view.zoom,
+            (width * 0.5 - view.pan_x) / view.zoom,
+            (height * 0.5 - view.pan_y) / view.zoom,
         );
-        view.zoom_by(0.5);
+        view.zoom_by(0.5, DEFAULT_SIZE);
         let (x, y) = view.screen(centre.0, centre.1);
-        assert!((x - WIDTH * 0.5).abs() < 0.01 && (y - HEIGHT * 0.5).abs() < 0.01);
-        view.zoom_by(10.0);
+        assert!((x - width * 0.5).abs() < 0.01 && (y - height * 0.5).abs() < 0.01);
+        view.zoom_by(10.0, DEFAULT_SIZE);
         assert_eq!(view.zoom, 2.5);
     }
 }

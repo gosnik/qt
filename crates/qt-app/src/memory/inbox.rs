@@ -973,7 +973,7 @@ impl ReviewInboxView {
             .gap_0p5()
             .w(px(330.))
             .flex_none()
-            .max_h(px(430.))
+            .min_h_0()
             .overflow_y_scroll()
             .child(section(
                 format!(
@@ -1558,7 +1558,13 @@ impl Render for ReviewInboxView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let pane = self.render_pane(cx);
+        // The queue and pane fill the panel and scroll on their own; when
+        // the filters and notices leave too little room in a short window
+        // the whole view scrolls instead.
         v_flex()
+            .id("inbox-root")
+            .size_full()
+            .overflow_y_scroll()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.to_ascii_lowercase();
@@ -1605,8 +1611,10 @@ impl Render for ReviewInboxView {
             })
             .child(
                 h_flex()
+                    .flex_1()
+                    .min_h(px(220.))
                     .gap_3()
-                    .items_start()
+                    .items_stretch()
                     .when(
                         !matches!(self.pane, Pane::Batch(_) | Pane::History { .. }),
                         |el| el.child(self.render_queue(cx)),
@@ -1616,7 +1624,7 @@ impl Render for ReviewInboxView {
                             .id("inbox-pane")
                             .flex_1()
                             .min_w_0()
-                            .max_h(px(430.))
+                            .min_h_0()
                             .overflow_y_scroll()
                             .child(pane),
                     ),
@@ -1631,11 +1639,13 @@ pub fn open(host: MemoryHost, window: &mut Window, cx: &mut App) {
     };
     let view = cx.new(|cx| ReviewInboxView::new(host, memory, window, cx));
     view.update(cx, |view, cx| window.focus(&view.focus, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Memory Review Inbox")
-            .w(px(1180.))
-            .on_ok(|_, _, _| false)
-            .child(view.clone())
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(
+            dialog.title("Memory Review Inbox"),
+            window,
+            1180.,
+            view.clone(),
+        )
+        .on_ok(|_, _, _| false)
     });
 }

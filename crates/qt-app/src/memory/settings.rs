@@ -221,7 +221,7 @@ impl MemorySettingsEditor {
         let mut list = v_flex()
             .id(SharedString::from(format!("memory-picker-{id}")))
             .gap_0p5()
-            .max_h(px(220.))
+            .max_h(px(320.))
             .overflow_y_scroll();
         for (i, choice) in choices
             .iter()
@@ -269,7 +269,8 @@ impl Render for MemorySettingsEditor {
         let mut rows = v_flex()
             .id("memory-settings-rows")
             .gap_2()
-            .max_h(px(560.))
+            .flex_1()
+            .min_h(px(120.))
             .overflow_y_scroll()
             .pr_2();
         let specs = self.specs.clone();
@@ -303,6 +304,7 @@ impl Render for MemorySettingsEditor {
             );
         }
         v_flex()
+            .size_full()
             .gap_2()
             .child(hint(
                 "Settings are written to global settings and apply on the next qt start; a project settings file may only narrow them.",
@@ -329,11 +331,13 @@ impl Render for MemorySettingsEditor {
 /// Opens the memory settings editor.
 pub fn open(host: MemoryHost, window: &mut Window, cx: &mut App) {
     let editor = cx.new(|cx| MemorySettingsEditor::new(host, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Memory settings")
-            .w(px(760.))
-            .on_ok(|_, _, _| false)
-            .child(editor.clone())
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(
+            dialog.title("Memory settings"),
+            window,
+            760.,
+            editor.clone(),
+        )
+        .on_ok(|_, _, _| false)
     });
 }
