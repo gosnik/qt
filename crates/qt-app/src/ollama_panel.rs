@@ -20,6 +20,10 @@ use qt_core::ollama::{
 use serde_json::Value;
 
 use crate::composer::format_bytes;
+use crate::dialogs::UiCallback;
+
+/// JSON lines shown for `/api/show`.
+const MAX_JSON_LINES: usize = 400;
 
 /// Lines for `/api/ps`.
 pub fn format_running(id: &str, value: &Value) -> Vec<String> {
@@ -96,7 +100,12 @@ pub fn format_info(model: &str, value: &Value) -> Vec<String> {
         }
     }
     out.push(String::new());
-    out.push(serde_json::to_string_pretty(&trimmed).unwrap_or_default());
+    let pretty = serde_json::to_string_pretty(&trimmed).unwrap_or_default();
+    let lines: Vec<&str> = pretty.lines().collect();
+    out.extend(lines.iter().take(MAX_JSON_LINES).map(|l| l.to_string()));
+    if lines.len() > MAX_JSON_LINES {
+        out.push(format!("… {} more lines", lines.len() - MAX_JSON_LINES));
+    }
     out
 }
 
@@ -153,7 +162,7 @@ pub struct OllamaPanel {
     cfg_key: Entity<InputState>,
     cfg_enabled: bool,
     pull: Entity<InputState>,
-    on_changed: Rc<dyn Fn(&mut Window, &mut App)>,
+    on_changed: UiCallback,
     _task: Option<Task<()>>,
 }
 
@@ -943,7 +952,11 @@ pub fn open(
 ) {
     let panel = cx.new(|cx| OllamaPanel::new(engine.clone(), http.clone(), on_changed, window, cx));
     window.open_dialog(cx, move |dialog, _, _| {
-        dialog.title("Ollama").w(px(820.)).child(panel.clone())
+        dialog
+            .title("Ollama")
+            .w(px(820.))
+            .on_ok(|_, _, _| false)
+            .child(panel.clone())
     });
 }
 
@@ -985,7 +998,8 @@ mod tests {
                 "context length: 40960"
             ]
         );
-        assert!(!lines.last().unwrap().contains("license"));
+        assert!(!lines.iter().any(|l| l.contains("license")));
+        assert_eq!(lines[6], "{");
     }
 
     #[test]

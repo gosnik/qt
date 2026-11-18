@@ -4923,10 +4923,16 @@ name = "qt-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "base64 0.22.1",
  "chrono",
  "gpui-kit",
+ "image",
  "qt-core",
+ "reqwest",
  "serde_json",
+ "tempfile",
+ "tokio-util",
 ]
 
 [[package]]

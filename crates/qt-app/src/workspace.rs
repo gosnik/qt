@@ -27,7 +27,7 @@ use crate::composer::{
     Attachment, dropped_paths_text, editor_command, has_image_extension, prompt_payload,
     run_external_editor,
 };
-use crate::dialogs::{self, RunHandler};
+use crate::dialogs::{self, RunHandler, UiCallback};
 use crate::model_picker::{
     ModelItem, ThinkingItem, clamp_level, enabled_models, in_scope, levels_for,
 };
@@ -944,7 +944,7 @@ impl Workspace {
 
     fn open_goal(&mut self, _: &OpenGoal, window: &mut Window, cx: &mut Context<Self>) {
         let this = cx.entity().downgrade();
-        let changed: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, cx| {
+        let changed: UiCallback = Rc::new(move |_, cx| {
             let _ = this.update(cx, |_, cx| cx.notify());
         });
         dialogs::open_goal(

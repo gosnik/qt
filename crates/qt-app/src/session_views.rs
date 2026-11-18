@@ -129,7 +129,7 @@ impl TreePanel {
             }
         })];
         let mut this = Self {
-            selected: conversation.leaf_id(),
+            selected: None,
             conversation,
             engine,
             filter: TreeFilter::Default,
@@ -145,6 +145,7 @@ impl TreePanel {
             _subscriptions: subscriptions,
         };
         this.refresh(cx);
+        this.select_current();
         if let Some(i) = this.selected_index() {
             this.scroll.scroll_to_item(i, ScrollStrategy::Center);
         }
@@ -163,6 +164,11 @@ impl TreePanel {
         cx.notify();
     }
 
+    /// Select the row standing for the current position.
+    fn select_current(&mut self) {
+        self.selected = self.rows.iter().find(|r| r.is_leaf).map(|r| r.id.clone());
+    }
+
     fn selected_index(&self) -> Option<usize> {
         let id = self.selected.as_deref()?;
         self.rows.iter().position(|r| r.id == id)
@@ -176,7 +182,9 @@ impl TreePanel {
         let Some(target) = self.selected.clone() else {
             return;
         };
-        if self.conversation.leaf_id().as_deref() == Some(target.as_str()) {
+        if self.conversation.leaf_id().as_deref() == Some(target.as_str())
+            || self.selected_row().is_some_and(|r| r.is_leaf)
+        {
             self.message = Some((false, "Already at this point".into()));
             cx.notify();
             return;
@@ -224,7 +232,8 @@ impl TreePanel {
                         this.message = Some((false, "Branch summarization cancelled".into()));
                     }
                     Ok(Ok(nav)) => {
-                        this.selected = this.conversation.leaf_id();
+                        this.refresh(cx);
+                        this.select_current();
                         this.message = Some((false, "Navigated to selected point".into()));
                         on_action(
                             SessionAction::Navigated {
@@ -258,6 +267,10 @@ impl TreePanel {
         let options = navigate_options(*choice, &custom, &label);
         let target = target.clone();
         self.navigate(target, options, window, cx);
+    }
+
+    pub fn is_summarizing(&self) -> bool {
+        matches!(self.mode, TreeMode::Summarizing)
     }
 
     fn cancel_summary(&mut self, cx: &mut Context<Self>) {
@@ -535,6 +548,9 @@ impl Render for TreePanel {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.filter = f;
                         this.refresh(cx);
+                        if this.selected_index().is_none() {
+                            this.select_current();
+                        }
                     })),
             );
         }
@@ -610,9 +626,21 @@ pub fn open_tree(
 ) {
     let panel =
         cx.new(|cx| TreePanel::new(engine.clone(), conversation.clone(), on_action, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
+    let conversation = conversation.clone();
+    window.open_dialog(cx, move |dialog, _, cx| {
+        // While a branch summary runs, Esc cancels it instead of closing.
+        let busy = panel.read(cx).is_summarizing();
+        let conversation = conversation.clone();
+        let closing = panel.clone();
         dialog
             .title("Session tree")
+            .on_ok(|_, _, _| false)
+            .keyboard(!busy)
+            .on_close(move |_, _, cx| {
+                if closing.read(cx).is_summarizing() {
+                    conversation.abort();
+                }
+            })
             .w(px(820.))
             .child(panel.clone())
     });
@@ -979,6 +1007,7 @@ pub fn open_picker(
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
             .title("Resume session")
+            .on_ok(|_, _, _| false)
             .w(px(720.))
             .child(panel.clone())
     });

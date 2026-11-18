@@ -2,8 +2,6 @@
 //! scoped-model settings). Every change is written to the global
 //! `settings.json` right away.
 
-use std::rc::Rc;
-
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -18,6 +16,7 @@ use qt_core::harness::settings::QueueMode;
 use qt_core::{Conversation, Engine, Settings};
 use serde_json::{Value, json};
 
+use crate::dialogs::UiCallback;
 use crate::model_picker::{enabled_models, in_scope, toggle_scoped};
 use crate::theme::{self, ThemeState};
 
@@ -130,9 +129,9 @@ pub fn set_enabled_models(settings: &mut Settings, models: &[String]) {
 /// Callbacks into the workspace.
 pub struct SettingsHooks {
     /// Settings changed; re-read whatever depends on them.
-    pub changed: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub changed: UiCallback,
     /// Re-discover models from every provider.
-    pub refresh_models: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub refresh_models: UiCallback,
 }
 
 pub struct SettingsPanel {
@@ -575,7 +574,11 @@ pub fn open(
     });
     let view = panel.clone();
     window.open_dialog(cx, move |dialog, _, _| {
-        dialog.title("Settings").w(px(640.)).child(view.clone())
+        dialog
+            .title("Settings")
+            .w(px(640.))
+            .on_ok(|_, _, _| false)
+            .child(view.clone())
     });
     panel
 }

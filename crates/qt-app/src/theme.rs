@@ -203,7 +203,6 @@ pub fn apply_to_colors(theme: &PiTheme, colors: &mut UiColors) {
         colors.button_primary_foreground = colors.primary_foreground;
         colors.ring = a;
         colors.caret = a;
-        colors.switch = a;
         colors.slider_bar = a;
         colors.progress_bar = a;
         colors.sidebar_primary = a;

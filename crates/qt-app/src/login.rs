@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use crate::dialogs::UiCallback;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
@@ -82,7 +83,7 @@ pub struct LoginPanel {
     expanded: Option<String>,
     flow: Option<OAuthFlow>,
     message: Option<(bool, String)>,
-    on_changed: Rc<dyn Fn(&mut Window, &mut App)>,
+    on_changed: UiCallback,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -624,6 +625,7 @@ pub fn open(
         let close_panel = panel.clone();
         dialog
             .title("Login")
+            .on_ok(|_, _, _| false)
             .w(px(600.))
             .on_close(move |_, _, cx| close_panel.update(cx, |p, _| p.shutdown()))
             .child(panel.clone())

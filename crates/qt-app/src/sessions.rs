@@ -190,6 +190,14 @@ pub fn tree_rows(
             child_count: row.child_count,
         });
     }
+    // A hidden leaf (label, session info …): its nearest visible ancestor
+    // stands for the current position.
+    if leaf.is_some()
+        && !out.iter().any(|r| r.is_leaf)
+        && let Some(last) = out.iter_mut().rev().find(|r| r.on_active_path)
+    {
+        last.is_leaf = true;
+    }
     out
 }
 
@@ -394,6 +402,15 @@ mod tests {
         assert_eq!(searched.len(), 1);
         let searched = tree_rows(&t, None, TreeFilter::Default, "assistant two");
         assert_eq!(searched[0].id, "a2");
+
+        // The leaf is a hidden metadata entry: its visible ancestor is current.
+        let rows = tree_rows(&t, Some("m"), TreeFilter::Default, "");
+        let current: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.is_leaf)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(current, ["u1"]);
     }
 
     #[test]

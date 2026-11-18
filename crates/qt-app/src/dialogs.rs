@@ -17,6 +17,9 @@ use qt_core::{AgentEvent, Conversation};
 use crate::run_status::{goal_controls, goal_line, parse_budget};
 use crate::sessions::first_line_truncated;
 
+/// A UI callback shared between views.
+pub type UiCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// Receives the event stream of a run started from a dialog.
 pub type RunHandler = Rc<dyn Fn(Receiver<AgentEvent>, &mut Window, &mut App)>;
 
@@ -35,9 +38,16 @@ pub fn open_compact(
     window.open_dialog(cx, move |dialog, _, cx| {
         let input_ok = input.clone();
         let run = on_compact.clone();
+        let input_enter = input.clone();
+        let run_enter = on_compact.clone();
         dialog
             .title("Compact context")
             .w(px(520.))
+            .on_ok(move |_, window, cx| {
+                let text = input_enter.read(cx).value().trim().to_string();
+                run_enter(Some(text).filter(|t| !t.is_empty()), window, cx);
+                true
+            })
             .child(
                 v_flex()
                     .gap_2()
@@ -92,9 +102,16 @@ pub fn open_rename(
     window.open_dialog(cx, move |dialog, _, _| {
         let input_ok = input.clone();
         let run = on_rename.clone();
+        let input_enter = input.clone();
+        let run_enter = on_rename.clone();
         dialog
             .title("Rename session")
             .w(px(460.))
+            .on_ok(move |_, window, cx| {
+                let text = input_enter.read(cx).value().to_string();
+                run_enter(text, window, cx);
+                true
+            })
             .child(Input::new(&input))
             .footer(
                 h_flex()
@@ -161,6 +178,7 @@ pub fn open_fork_picker(
         }
         dialog
             .title("Fork from a message")
+            .on_ok(|_, _, _| false)
             .w(px(620.))
             .child(
                 v_flex()
@@ -184,7 +202,7 @@ pub struct GoalPanel {
     lines: Vec<String>,
     error: bool,
     on_run: RunHandler,
-    on_changed: Rc<dyn Fn(&mut Window, &mut App)>,
+    on_changed: UiCallback,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -192,7 +210,7 @@ impl GoalPanel {
     pub fn new(
         conversation: Conversation,
         on_run: RunHandler,
-        on_changed: Rc<dyn Fn(&mut Window, &mut App)>,
+        on_changed: UiCallback,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -402,12 +420,16 @@ impl Render for GoalPanel {
 pub fn open_goal(
     conversation: &Conversation,
     on_run: RunHandler,
-    on_changed: Rc<dyn Fn(&mut Window, &mut App)>,
+    on_changed: UiCallback,
     window: &mut Window,
     cx: &mut App,
 ) {
     let panel = cx.new(|cx| GoalPanel::new(conversation.clone(), on_run, on_changed, window, cx));
     window.open_dialog(cx, move |dialog, _, _| {
-        dialog.title("Goal").w(px(600.)).child(panel.clone())
+        dialog
+            .title("Goal")
+            .w(px(600.))
+            .on_ok(|_, _, _| false)
+            .child(panel.clone())
     });
 }
