@@ -90,6 +90,12 @@ from the lists above.
 `qt-memory` also uses `qt-core` (messages, hooks and the `Tool` trait), `futures`, `tokio`
 (blocking tool execution) and `tempfile` (the dense-indexing spool) from the lists above.
 
+## Subagents (`qt-subagents`)
+
+No crates beyond the lists above: `qt-core`, `tokio`, `tokio-util`, `futures`,
+`async-channel`, `serde_json`, `chrono`, `rand`, `libc` (unix, process-group kill) and
+`tempfile` (dev). The worker index lock uses `std::fs::File::try_lock`.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including
