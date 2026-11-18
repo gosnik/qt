@@ -95,6 +95,7 @@ pub async fn run_agent(
             tools: specs.clone(),
             max_tokens: params.max_tokens,
             thinking: params.thinking,
+            ..Default::default()
         };
         emit(AgentEvent::AssistantStart);
         let mut on_stream = |event: StreamEvent| emit(AgentEvent::Stream(event));

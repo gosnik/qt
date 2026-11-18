@@ -16,7 +16,7 @@ answer. Reads the prompt from stdin when none is given.
 
 Options:
   -m, --model <provider/id>   Model to use (default: settings defaultProvider/defaultModel)
-  -t, --thinking <level>      off | low | medium | high
+  -t, --thinking <level>      off | minimal | low | medium | high | xhigh
   -c, --continue              Continue the most recent session for this directory
   -s, --session <path>        Continue a specific session file
       --cwd <dir>             Working directory (default: current directory)

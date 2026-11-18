@@ -89,7 +89,7 @@ fn runs_tool_calls_and_persists_session() {
     .unwrap();
 
     let engine = Engine::new(home.clone(), &workspace).unwrap();
-    let conv = engine.new_conversation(Some(ModelRef::new("ollama", "mock-model")));
+    let conv = engine.new_conversation(Some(ModelRef::new("ollama:local", "mock-model")));
     let rx = conv.prompt("please write a file", vec![]).unwrap();
     let events: Vec<AgentEvent> = engine.block_on(async move {
         let mut events = Vec::new();
