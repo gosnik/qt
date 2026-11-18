@@ -31,7 +31,7 @@ remain before the checked items are visible in the app and CLI.
 
 - [x] Engine reads workspace policy, bash and web options, mutation policy and image resize from settings and passes them to tools.
 - [x] Engine builds the system prompt from `resources::load_resources` (skills, SYSTEM.md, APPEND_SYSTEM.md, shellPath).
-- [ ] Composition root (`qt-runtime`) registers index tools + service, MCP manager + tools, llama provider, memory and extensions for app and CLI.
+- [x] Composition root (`qt-runtime`) registers index tools + service, MCP manager + tools, llama provider, memory and extensions for app and CLI.
 - [x] Pluggable provider backends in qt-core so `llama` (qt-llama) is dispatched by `provider::stream`.
 - [x] Settings migration from milestone-1 `ollama` provider id to `ollama:local`.
 
@@ -86,8 +86,8 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] Extras: read repeated-read guard and image resize; edit `replace_all` and NFKC fallback; grep `output_mode`, `head_limit`, `offset`, `multiline`, `type`, `hidden`, `no_ignore`; find `type`/`directories`; ls `recursive`/`depth`/`ignore`; bash `timeout_ms`, `workdir`, details fields, streaming.
 - [x] New tools: append_text, apply_patch (Codex envelope), clipboard, complete_path, package_manager (plans only).
 - [x] Web tools: web_fetch, web_search (DuckDuckGo), web_run (stateful batched browser); public-URL policy; `PI_OFFLINE` / `--offline`.
-- [ ] `!cmd` / `!!cmd` user bash with session entries.
-- [ ] `@file` arguments and mentions (inline `<file>`, images), path autocomplete.
+- [x] `!cmd` / `!!cmd` user bash with session entries.
+- [x] `@file` arguments and mentions (inline `<file>`, images), path autocomplete.
 
 ## Milestone 6: Project index
 
@@ -107,18 +107,18 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 
 ## Milestone 8: Modes and CLI
 
-- [ ] JSON event mode (`--mode json`), Pi event shapes, exit codes.
+- [x] JSON event mode (`--mode json`), Pi event shapes, exit codes.
 - [ ] RPC mode (all commands and events, extension UI requests).
-- [ ] Full CLI flag set (model, thinking, tools, skills/templates/themes toggles, `--no-context-files`, `--list-models` table, `--export`, `--offline`, logging flags/env).
-- [ ] Subcommands: `install/remove/update/list` packages, `config`, `memory`.
+- [x] Full CLI flag set (model, thinking, tools, skills/templates/themes toggles, `--no-context-files`, `--list-models` table, `--export`, `--offline`, logging flags/env).
+- [x] Subcommands: `install/remove/update/list` packages, `config`, `memory`.
 - [x] Startup migrations (oauth.json, sessions dir, tools→bin, commands→prompts).
 - [x] Logging (`--log-file`, `--log-stderr`, `--log-level`, `QT_LOG_*`).
 
 ## Milestone 9: GUI equivalents of interactive features
 
-- [ ] Command palette / slash commands with autocomplete (all built-ins listed in the inventory).
+- [x] Command palette / slash commands with autocomplete (all built-ins listed in the inventory).
 - [ ] `/settings` panel, `/session` and `/status` info, `/context` inspector, `/export` (HTML + JSONL), `/share` (gist), `/copy`, `/name`, `/changelog`, `/scoped-models` / `enabledModels`, model refresh.
-- [ ] Image paste and drop into the composer; prompt history (`history.jsonl`) with Up/Down; external editor.
+- [x] Image paste and drop into the composer; prompt history (`history.jsonl`) with Up/Down; external editor.
 - [x] HTML export renderer.
 
 ## Milestone 10: Extensions
