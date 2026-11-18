@@ -331,11 +331,17 @@ fn command_succeeds(program: &str, args: &[&str]) -> bool {
     command_output(program, args).is_some()
 }
 
-/// Locate an executable on `PATH`.
+/// Locate an executable on `PATH` (trying the `.exe` suffix on Windows,
+/// where `cmake` and `ninja` are installed as `cmake.exe` / `ninja.exe`).
 pub fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
+    let suffixes: &[&str] = if cfg!(windows) { &["", ".exe"] } else { &[""] };
     std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| {
+            suffixes
+                .iter()
+                .map(move |suffix| dir.join(format!("{name}{suffix}")))
+        })
         .find(|candidate| candidate.is_file())
 }
 

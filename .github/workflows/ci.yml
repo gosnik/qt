@@ -2,53 +2,123 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, rust-port]
   pull_request:
-
-permissions:
-  contents: read
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: "1"
+  # Fail the build instead of silently compiling without llama.cpp when the
+  # submodule checkout is missing.
+  QT_LLAMA_REQUIRE: "1"
 
 jobs:
-  build:
-    name: ${{ matrix.os }}
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            # Runners have no GPU; build the CPU backend deterministically.
+            llama_backends: cpu
+          - name: macos-arm64
+            os: macos-14
+            # `auto` selects Metal on macOS, which builds without a GPU.
+            llama_backends: auto
+          - name: windows-x86_64
+            os: windows-2022
+            llama_backends: cpu
+    env:
+      QT_LLAMA_GPU_BACKENDS: ${{ matrix.llama_backends }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install Linux GUI dependencies
+      - name: Install Linux system packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev libssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake ninja-build clang libclang-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+            libx11-xcb-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            libssl-dev libzstd-dev
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Point bindgen at the runner's LLVM
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ matrix.name }}-${{ matrix.llama_backends }}
+          cache-on-failure: true
 
-      - name: Format
-        if: runner.os == 'Linux'
-        run: cargo fmt --all --check
+      - name: Configure git identity for tests
+        shell: bash
+        run: |
+          git config --global user.name "qt CI"
+          git config --global user.email "ci@invalid.example"
+          git config --global init.defaultBranch main
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+
       - name: Test
         run: cargo test --workspace --locked
 
-      - name: Build release binaries
-        run: cargo build --release --locked -p qt-app -p qt-cli
+  packaging-config:
+    name: packaging files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            desktop-file-utils shellcheck python3-pil
+      - name: Validate desktop entry
+        run: desktop-file-validate packaging/linux/qt.desktop
+      - name: Lint packaging scripts
+        run: shellcheck packaging/scripts/package.sh packaging/linux/install.sh
+      - name: Icon set is up to date
+        # PNG bytes depend on the Pillow version; the SVG is exact.
+        run: |
+          python3 packaging/icons/generate.py
+          git diff --exit-code -- packaging/icons/qt.svg

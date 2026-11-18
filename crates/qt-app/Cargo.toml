@@ -24,3 +24,62 @@ tokio-util.workspace = true
 [dev-dependencies]
 image.workspace = true
 tempfile.workspace = true
+
+# Packaging (cargo-packager 0.11; see packaging/README.md). Paths are relative
+# to this crate. Binaries are taken from target/<profile>, so build
+# `-p qt-app -p qt-cli` first; formats are chosen per platform by
+# packaging/scripts/package.sh and the release workflow.
+[package.metadata.packager]
+product-name = "qt"
+identifier = "dev.qt-agent.qt"
+publisher = "qt contributors"
+authors = ["qt contributors"]
+description = "Desktop coding agent with a native GPUI interface"
+long-description = "qt reads and edits files and runs commands in your project, streaming the model's answers and tool calls into a native window. The bundle also contains qt-cli, the headless front end used for print/JSON modes and subagent workers."
+category = "DeveloperTool"
+copyright = "Copyright (c) qt contributors"
+out-dir = "../../target/packager"
+icons = [
+  "../../packaging/icons/png/qt-16.png",
+  "../../packaging/icons/png/qt-32.png",
+  "../../packaging/icons/png/qt-48.png",
+  "../../packaging/icons/png/qt-64.png",
+  "../../packaging/icons/png/qt-128.png",
+  "../../packaging/icons/png/qt-256.png",
+  "../../packaging/icons/png/qt-512.png",
+  "../../packaging/icons/png/qt-1024.png",
+  "../../packaging/icons/qt.ico",
+]
+binaries = [
+  { path = "qt", main = true },
+  { path = "qt-cli", main = false },
+]
+
+[package.metadata.packager.linux]
+generate-desktop-entry = true
+
+[package.metadata.packager.deb]
+desktop-template = "../../packaging/linux/qt.desktop.hbs"
+section = "devel"
+# `qt` links libxcb/xkbcommon and loads Vulkan (or EGL/GLES) and the Wayland
+# client library at run time; qt-cli only needs the C/C++ runtime.
+depends = [
+  "libc6",
+  "libstdc++6",
+  "libgcc-s1",
+  "libxcb1",
+  "libxkbcommon0",
+  "libxkbcommon-x11-0",
+  "libwayland-client0",
+  "libvulkan1 | libegl1",
+]
+files = { "../../packaging/icons/qt.svg" = "usr/share/icons/hicolor/scalable/apps/qt.svg" }
+
+[package.metadata.packager.appimage]
+files = { "../../packaging/icons/qt.svg" = "usr/share/icons/hicolor/scalable/apps/qt.svg" }
+
+[package.metadata.packager.macos]
+minimum-system-version = "10.15.7"
+
+[package.metadata.packager.wix]
+languages = ["en-US"]

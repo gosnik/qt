@@ -1,5 +1,9 @@
 //! qt desktop application.
 
+// Release builds on Windows are GUI-subsystem executables (no console window
+// when launched from the Start menu / MSI shortcut).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod composer;
 mod dialogs;
 mod login;
