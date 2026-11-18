@@ -48,6 +48,15 @@ pre-handler and Dreaming run `qt-cli` children, so keep `qt-cli` next to `qt` (o
 `QT_SUBAGENT_EXECUTABLE`). In-process llama.cpp is built when its source is present
 (`git submodule update --init third_party/llama.cpp` or `QT_LLAMA_CPP_DIR`).
 
+To install, `packaging/scripts/package.sh` builds both binaries and packages them for
+the host: a `.tar.gz` (with `install.sh` for `~/.local`), AppImage and `.deb` on Linux,
+an unsigned `qt.app` (zipped) on macOS, and a `.zip` plus `.msi` on Windows, all in
+`target/dist/`. It uses [cargo-packager](https://crates.io/crates/cargo-packager)
+(`cargo install cargo-packager --version 0.11.8 --locked`); see
+[`packaging/README.md`](packaging/README.md). CI (`.github/workflows/ci.yml`) runs fmt,
+clippy and tests on Linux, macOS and Windows, and `.github/workflows/release.yml` builds
+the same packages as workflow artifacts.
+
 ## First run
 
 1. Open **API keys** in the sidebar and add a key for Anthropic, OpenAI or OpenRouter. Keys are

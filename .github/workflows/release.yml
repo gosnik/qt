@@ -1,0 +1,149 @@
+name: Release packages
+
+# Builds qt (GUI) + qt-cli and packages them per platform. The packages are
+# uploaded as workflow artifacts only; publishing a GitHub release from them
+# is a manual step.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      llama_backends:
+        description: >-
+          QT_LLAMA_GPU_BACKENDS for the Linux and Windows builds (cpu, vulkan, ...).
+          macOS always uses auto (Metal).
+        required: false
+        default: cpu
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  QT_LLAMA_REQUIRE: "1"
+  CARGO_PACKAGER_VERSION: "0.11.8"
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 keeps the glibc floor of the tarball/AppImage low.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            backends: linux
+          - name: macos-arm64
+            os: macos-14
+            backends: macos
+          - name: windows-x86_64
+            os: windows-2022
+            backends: windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select llama.cpp backends
+        shell: bash
+        env:
+          # Passed through the environment, never interpolated into the script.
+          REQUESTED_BACKENDS: ${{ github.event.inputs.llama_backends }}
+          PLATFORM: ${{ matrix.backends }}
+        run: |
+          if [ "$PLATFORM" = macos ]; then
+            backends=auto
+          else
+            backends="${REQUESTED_BACKENDS:-cpu}"
+          fi
+          case "$backends" in
+            *[!a-z0-9,]*) echo "invalid llama_backends: $backends" >&2; exit 1 ;;
+          esac
+          # qt-llama-sys already configures GGML_NATIVE=OFF, so the CPU
+          # backend is portable across x86-64 / arm64 machines.
+          echo "QT_LLAMA_GPU_BACKENDS=$backends" >> "$GITHUB_ENV"
+
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake ninja-build clang libclang-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+            libx11-xcb-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            libssl-dev libzstd-dev file desktop-file-utils
+          if [ "$QT_LLAMA_GPU_BACKENDS" != cpu ]; then
+            # Vulkan backend: SPIR-V headers and the glslc shader compiler.
+            sudo apt-get install -y --no-install-recommends spirv-headers glslang-tools
+            sudo apt-get install -y --no-install-recommends glslc || true
+          fi
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Point bindgen at the runner's LLVM
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.name }}
+          cache-on-failure: true
+
+      - name: Install cargo-packager
+        shell: bash
+        run: |
+          if ! cargo packager --version 2>/dev/null | grep -q "$CARGO_PACKAGER_VERSION"; then
+            cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked --force
+          fi
+
+      - name: Build and package
+        shell: bash
+        env:
+          # linuxdeploy and its plugins run without FUSE on the runner.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: packaging/scripts/package.sh
+
+      - name: Smoke-test the packaged qt-cli
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              tar -xzf target/dist/qt-*.tar.gz -C "$RUNNER_TEMP"
+              "$RUNNER_TEMP"/qt-*/bin/qt-cli --version
+              chmod +x target/dist/*.AppImage
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE"/target/dist/*.AppImage --appimage-extract >/dev/null)
+              test -x "$RUNNER_TEMP/squashfs-root/usr/bin/qt"
+              test -x "$RUNNER_TEMP/squashfs-root/usr/bin/qt-cli"
+              "$RUNNER_TEMP/squashfs-root/usr/bin/qt-cli" --version
+              desktop-file-validate "$RUNNER_TEMP/squashfs-root/usr/share/applications/qt.desktop"
+              ;;
+            macOS)
+              ditto -x -k target/dist/qt-*.app.zip "$RUNNER_TEMP/app"
+              "$RUNNER_TEMP"/app/*.app/Contents/MacOS/qt-cli --version
+              ;;
+            Windows)
+              7z x -y -o"$RUNNER_TEMP/zip" target/dist/qt-*.zip >/dev/null
+              "$RUNNER_TEMP"/zip/qt-*/qt-cli.exe --version
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qt-${{ matrix.name }}
+          path: target/dist/*
+          if-no-files-found: error
+          retention-days: 14

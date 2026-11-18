@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=qt
+GenericName=Coding Agent
+Comment=Desktop coding agent with a native GPUI interface
+Exec=qt
+Icon=qt
+Terminal=false
+Categories=Development;IDE;
+Keywords=agent;ai;llm;code;assistant;
+StartupNotify=true
+StartupWMClass=qt
