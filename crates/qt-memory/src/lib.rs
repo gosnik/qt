@@ -7,6 +7,9 @@
 //! - [`review`]: the review queue workflow.
 //! - [`settings`]: `memory.*` settings with the project-may-not-broaden rule.
 //! - [`qtmem`] and [`skill_import`]: offline qtmem v3 import and skill import.
+//! - [`dreaming`], [`research`], [`verifier`] and [`post_processing`]: governed
+//!   Dreaming, restricted web research, the `auto_validate` evidence verifier
+//!   and review-only post-processing / semantic consolidation.
 //!
 //! The crate is UI-agnostic and synchronous; callers on an async runtime run
 //! store operations on a blocking thread.
@@ -36,9 +39,12 @@ macro_rules! string_enum {
         }
     };
 }
+pub mod dreaming;
 pub mod error;
 pub mod model;
+pub mod post_processing;
 pub mod qtmem;
+pub mod research;
 pub mod review;
 pub mod scope;
 pub mod service;
@@ -46,6 +52,7 @@ pub mod settings;
 pub mod skill_import;
 pub mod store;
 pub mod text;
+pub mod verifier;
 
 pub use error::{MemoryError, Result};
 pub use model::*;
