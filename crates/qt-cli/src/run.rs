@@ -25,59 +25,19 @@ use crate::session::{self, StartupStop};
 /// How long shutdown waits for memory capture of the finished runs.
 const CAPTURE_FLUSH: Duration = Duration::from_secs(30);
 
-/// Runtime options from the parsed flags.
+/// Runtime options from the parsed flags (shared with the desktop app).
 pub fn runtime_options(
     parsed: &CliArgs,
     mode: StartupMode,
     cwd: &Path,
     home: &AgentHome,
 ) -> RuntimeOptions {
-    let paths = |values: &[String]| values.iter().map(|v| resolve(cwd, v)).collect::<Vec<_>>();
-    RuntimeOptions {
-        cwd: cwd.to_path_buf(),
-        agent_home: Some(home.root().to_path_buf()),
-        mode: match mode {
-            StartupMode::Json => RunMode::Json,
-            StartupMode::Rpc => RunMode::Rpc,
-            _ => RunMode::Print,
-        },
-        provider: parsed.provider.clone(),
-        model: parsed.model.clone(),
-        api_key: parsed.api_key.clone(),
-        thinking: parsed.thinking,
-        models: parsed
-            .models
-            .iter()
-            .filter(|m| !m.is_empty())
-            .cloned()
-            .collect(),
-        system_prompt: parsed.system_prompt.clone(),
-        append_system_prompt: parsed.append_system_prompt.clone(),
-        tools: parsed.tools.clone(),
-        no_tools: parsed.no_tools,
-        no_builtin_tools: parsed.no_builtin_tools,
-        no_memory: parsed.no_memory,
-        extensions: paths(&parsed.extensions),
-        no_extensions: parsed.no_extensions,
-        extension_flags: parsed.unknown_flags.clone(),
-        skills: paths(&parsed.skills),
-        no_skills: parsed.no_skills,
-        prompt_templates: paths(&parsed.prompt_templates),
-        no_prompt_templates: parsed.no_prompt_templates,
-        themes: paths(&parsed.themes),
-        no_themes: parsed.no_themes,
-        no_context_files: parsed.no_context_files,
-        discover_local_models: parsed.local_model_dirs.iter().map(PathBuf::from).collect(),
-        offline: parsed.offline,
-        session_dir: parsed
-            .session_dir
-            .as_ref()
-            .map(|d| PathBuf::from(resolve(cwd, d))),
-        no_session: parsed.no_session,
-        startup_migrations: false,
-        child_executable: None,
-        web: None,
-    }
+    let mode = match mode {
+        StartupMode::Json => RunMode::Json,
+        StartupMode::Rpc => RunMode::Rpc,
+        _ => RunMode::Print,
+    };
+    qt_runtime::cli_args::runtime_options(parsed, mode, cwd, Some(home.root()))
 }
 
 /// Archived Dreaming-verifier guard: the verification child must run the

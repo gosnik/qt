@@ -27,8 +27,13 @@ mod workspace;
 use std::time::Duration;
 
 use anyhow::Result;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
-use qt_runtime::{Runtime, RuntimeOptions};
+use qt_core::logging::{LoggingOptions, init_logging};
+use qt_runtime::cli_args::{self, Severity};
+use qt_runtime::initial_prompt::{InitialPrompt, prepare_initial_prompt, submit_initial_prompt};
+use qt_runtime::{RunMode, Runtime};
 
 use crate::workspace::Workspace;
 
@@ -42,19 +47,58 @@ impl Global for RuntimeGlobal {}
 const SHUTDOWN_CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn main() -> Result<()> {
-    let args = startup::parse_args(std::env::args().skip(1))?;
-    if args.help {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let logging = LoggingOptions::from_args(&raw);
+    if let Err(e) = init_logging(&logging) {
+        eprintln!("qt: cannot open log file: {e}");
+    }
+    let args = match startup::parse_args(raw) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("Error: {err:#}");
+            std::process::exit(1);
+        }
+    };
+    let mut failed = false;
+    for (severity, message) in &args.cli.diagnostics {
+        match severity {
+            Severity::Error => {
+                eprintln!("Error: {message}");
+                failed = true;
+            }
+            Severity::Warning => eprintln!("Warning: {message}"),
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    if args.cli.version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.cli.help {
         print!("{}", startup::USAGE);
         return Ok(());
     }
+    if args.cli.offline || std::env::var("PI_OFFLINE").is_ok_and(|v| v == "1") {
+        // SAFETY: single-threaded at this point; children inherit it.
+        unsafe {
+            std::env::set_var("PI_OFFLINE", "1");
+            std::env::set_var("PI_SKIP_VERSION_CHECK", "1");
+        }
+    }
+    let launch_dir = std::env::current_dir()?;
     let cwd = match &args.cwd {
-        Some(dir) => dir.clone(),
-        None => std::env::current_dir()?,
+        Some(dir) => launch_dir.join(dir),
+        None => launch_dir.clone(),
     };
     anyhow::ensure!(cwd.is_dir(), "{} is not a directory", cwd.display());
-    let mut options = RuntimeOptions::interactive(cwd.clone());
-    options.no_session = args.no_session;
-    options.session_dir = args.session_dir.as_ref().map(|dir| cwd.join(dir));
+    let stdin = startup::read_piped_stdin();
+    // Paths on the command line are relative to where qt was started; the
+    // session runs in the project directory.
+    let mut options = cli_args::runtime_options(&args.cli, RunMode::Interactive, &launch_dir, None);
+    options.cwd = cwd.clone();
+    options.startup_migrations = true;
     let runtime = Runtime::build(options)?;
     for diagnostic in runtime.diagnostics() {
         eprintln!("qt: {diagnostic}");
@@ -67,6 +111,41 @@ fn main() -> Result<()> {
             std::process::exit(1);
         }
     };
+    let messages: Vec<String> = args
+        .cli
+        .messages
+        .iter()
+        .chain(runtime.extra_messages())
+        .cloned()
+        .collect();
+    let initial = match prepare_initial_prompt(
+        &messages,
+        &args.cli.file_args,
+        stdin.as_deref(),
+        &launch_dir,
+        engine.settings().image_auto_resize(),
+    ) {
+        Ok((prompt, diagnostics)) => {
+            for d in diagnostics {
+                eprintln!("Warning: {}", d.message);
+            }
+            (!prompt.is_empty()).then_some(prompt)
+        }
+        Err(message) => {
+            eprintln!("Error: {message}");
+            std::process::exit(1);
+        }
+    };
+    // The window cannot ask about a session's missing cwd before the first
+    // prompt is sent, so refuse that combination (archived non-interactive
+    // wording).
+    if initial.is_some()
+        && let startup::StartupAction::Open(path) = &startup
+        && let Some(issue) = engine.session_cwd_issue(path)
+    {
+        eprintln!("{}", issue.error_text());
+        std::process::exit(1);
+    }
     runtime.start_background_services();
     let project = engine
         .cwd()
@@ -94,12 +173,17 @@ fn main() -> Result<()> {
             };
             let engine = engine.clone();
             let startup = startup.clone();
+            let initial = initial.clone();
             if let Err(err) = gpui_kit::open_window(options, cx, move |window, cx| {
                 let startup = startup.clone();
+                let initial = initial.clone();
                 cx.new(|cx| {
                     let workspace = Workspace::new(engine, window, cx);
                     cx.defer_in(window, move |this: &mut Workspace, window, cx| {
-                        this.apply_startup(startup, window, cx)
+                        this.apply_startup(startup, window, cx);
+                        if let Some(prompt) = initial {
+                            send_initial_prompt(prompt, window, cx);
+                        }
                     });
                     workspace
                 })
@@ -124,4 +208,20 @@ fn main() -> Result<()> {
             cx.activate(true);
         });
     Ok(())
+}
+
+/// Send the command line's initial prompt in the window's conversation; its
+/// run is shown like a run an extension started.
+fn send_initial_prompt(prompt: InitialPrompt, window: &mut Window, cx: &mut Context<Workspace>) {
+    let runtime = cx.global::<RuntimeGlobal>().0.clone();
+    let Some(conversation) = runtime.active_conversation() else {
+        return;
+    };
+    match submit_initial_prompt(&conversation, prompt) {
+        Ok(Some(events)) => {
+            runtime.deliver_run(events);
+        }
+        Ok(None) => {}
+        Err(err) => window.push_notification(Notification::error(format!("{err:#}")), cx),
+    }
 }

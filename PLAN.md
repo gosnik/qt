@@ -110,6 +110,8 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] JSON event mode (`--mode json`), Pi event shapes, exit codes.
 - [x] RPC mode (all commands and events, extension UI requests).
 - [x] Full CLI flag set (model, thinking, tools, skills/templates/themes toggles, `--no-context-files`, `--list-models` table, `--export`, `--offline`, logging flags/env).
+- [x] Desktop app (`qt`) takes the archived interactive flag set through the shared parser (`qt_runtime::cli_args`): every runtime flag as in `qt-cli`, `--cwd`, session flags, headless-only flags refused with a pointer to `qt-cli`, messages / `@file` / piped stdin sent as the first prompt, archived startup warnings (package updates, Anthropic subscription auth) in `Runtime::diagnostics()`.
+- [ ] `qt` command-line messages that are slash commands: templates and skills expand, but built-in and extension commands are sent as prompts instead of running (the archived interactive mode ran them like typed input; needs a Workspace entry point).
 - [x] Subcommands: `install/remove/update/list` packages, `config`, `memory`.
 - [x] Startup migrations (oauth.json, sessions dir, tools→bin, commands→prompts).
 - [x] Logging (`--log-file`, `--log-stderr`, `--log-level`, `QT_LOG_*`).
