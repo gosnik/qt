@@ -82,6 +82,8 @@ pub struct OAuthBinding {
     pub credentials: OAuthCredentials,
     /// `auth.json` to update after a refresh.
     pub auth_path: Option<PathBuf>,
+    /// Token endpoint override (tests); `None` uses the provider's real endpoint.
+    pub token_url: Option<String>,
 }
 
 impl fmt::Debug for OAuthBinding {
@@ -356,6 +358,7 @@ fn catalog_providers(
                 config.oauth = Some(OAuthBinding {
                     credentials: creds,
                     auth_path: auth_path.clone(),
+                    token_url: None,
                 });
             }
             Some(Credential::ApiKey(key)) => config.api_key = Some(key),

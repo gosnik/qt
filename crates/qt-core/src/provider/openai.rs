@@ -515,7 +515,7 @@ pub(crate) async fn stream(
     on_event: &mut (dyn FnMut(StreamEvent) + Send),
 ) -> Result<()> {
     if provider.needs_api_key() && provider.api_key.is_none() {
-        bail!("No API key configured for {}", provider.label);
+        bail!(crate::auth::missing_credential_message(&provider.id));
     }
     let built = build_request(provider, model, request)?;
     let body = serde_json::to_vec(&built.body)?;

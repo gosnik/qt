@@ -309,33 +309,88 @@ pub fn format_dimension_note(image: &ResizedImage) -> Option<String> {
     ))
 }
 
-/// Prepare an image attachment: optionally resize it to provider limits.
+impl ImageFormat {
+    /// Whether model providers accept this format as image input
+    /// (PNG, JPEG, GIF, WebP — Pi `SUPPORTED_IMAGE_MIME_TYPES`).
+    pub fn is_provider_supported(self) -> bool {
+        !matches!(self, Self::Bmp)
+    }
+}
+
+/// Re-encode `bytes` as PNG (Pi `convertToPng`, used for clipboard formats
+/// such as BMP that providers do not accept).
+pub fn convert_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    encode_png(&decode_oriented(bytes)?)
+}
+
+/// Why [`prepare_image`] could not produce an attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareImageError {
+    /// The bytes are not a decodable image.
+    Unreadable,
+    /// `images.autoResize` is on but the image cannot fit the limits.
+    TooLarge { base64_bytes: usize },
+}
+
+impl std::fmt::Display for PrepareImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable => f.write_str("the image could not be decoded"),
+            Self::TooLarge { base64_bytes } => {
+                let limits = ResizeOptions::default();
+                write!(
+                    f,
+                    "Image omitted because it could not be resized to fit within the configured auto-resize limits ({}x{}, {} base64 bytes; observed {base64_bytes} bytes).",
+                    limits.max_width, limits.max_height, limits.max_base64_bytes
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PrepareImageError {}
+
+/// Prepare an image attachment: formats providers reject (BMP) become PNG,
+/// then with `auto_resize` the image is fitted to provider limits.
 /// Returns the image block and, when resized, the dimension note.
 pub fn prepare_image(
     data: &str,
     mime_type: &str,
     auto_resize: bool,
-) -> (ContentBlock, Option<String>) {
-    let original = ContentBlock::Image {
-        data: data.to_string(),
-        mime_type: mime_type.to_string(),
-    };
+) -> Result<(ContentBlock, Option<String>), PrepareImageError> {
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut data = data.trim().to_string();
+    let mut mime_type = mime_type.to_string();
+    let format = engine
+        .decode(data.as_bytes())
+        .ok()
+        .and_then(|bytes| sniff_format(&bytes).map(|f| (f, bytes)));
+    if let Some((format, bytes)) = &format
+        && !format.is_provider_supported()
+    {
+        let png = convert_to_png(bytes).ok_or(PrepareImageError::Unreadable)?;
+        data = engine.encode(png);
+        mime_type = ImageFormat::Png.mime_type().into();
+    }
     if !auto_resize {
-        return (original, None);
+        return Ok((ContentBlock::Image { data, mime_type }, None));
     }
-    match resize_image(data, mime_type, &ResizeOptions::default()) {
-        Some(resized) => {
-            let note = format_dimension_note(&resized);
-            (
-                ContentBlock::Image {
-                    data: resized.data,
-                    mime_type: resized.mime_type,
-                },
-                note,
-            )
+    let base64_bytes = data.len();
+    let resized = resize_image(&data, &mime_type, &ResizeOptions::default()).ok_or({
+        if format.is_none() {
+            PrepareImageError::Unreadable
+        } else {
+            PrepareImageError::TooLarge { base64_bytes }
         }
-        None => (original, None),
-    }
+    })?;
+    let note = format_dimension_note(&resized);
+    Ok((
+        ContentBlock::Image {
+            data: resized.data,
+            mime_type: resized.mime_type,
+        },
+        note,
+    ))
 }
 
 /// The `read` tool's resize hook backed by [`resize_image`] with the
@@ -488,8 +543,55 @@ mod tests {
         let out = resize_image(&data, "image/jpeg", &options).unwrap();
         assert_eq!((out.original_width, out.original_height), (20, 80));
         assert_eq!((out.width, out.height), (10, 40));
-        let (block, note) = prepare_image(&data, "image/jpeg", false);
+        let (block, note) = prepare_image(&data, "image/jpeg", false).unwrap();
         assert!(note.is_none());
         assert!(matches!(block, ContentBlock::Image { data: d, .. } if d == data));
+    }
+
+    fn bmp(width: u32, height: u32) -> Vec<u8> {
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(width, height, Rgb([1, 2, 3])));
+        let mut out = Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Bmp).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn prepare_converts_bmp_and_rejects_unfittable_images() {
+        let engine = base64::engine::general_purpose::STANDARD;
+        // BMP is not accepted by providers: it becomes PNG with or without resizing.
+        for auto_resize in [true, false] {
+            let (block, note) =
+                prepare_image(&engine.encode(bmp(30, 20)), "image/bmp", auto_resize).unwrap();
+            assert!(note.is_none());
+            let ContentBlock::Image { data, mime_type } = block else {
+                panic!()
+            };
+            assert_eq!(mime_type, "image/png");
+            let bytes = engine.decode(data).unwrap();
+            assert_eq!(sniff_format(&bytes), Some(ImageFormat::Png));
+            assert_eq!(inspect(&bytes).unwrap().display_dimensions(), (30, 20));
+        }
+        // Oversized images are resized with Pi's note.
+        let (block, note) =
+            prepare_image(&engine.encode(png(3000, 1000)), "image/png", true).unwrap();
+        assert!(
+            note.unwrap()
+                .contains("original 3000x1000, displayed at 2000x667")
+        );
+        let ContentBlock::Image { data, .. } = block else {
+            panic!()
+        };
+        let meta = inspect(&engine.decode(data).unwrap()).unwrap();
+        assert_eq!((meta.width, meta.height), (2000, 667));
+        // Garbage is unreadable rather than silently sent.
+        assert_eq!(
+            prepare_image(&engine.encode(b"not an image"), "image/png", true).unwrap_err(),
+            PrepareImageError::Unreadable
+        );
+        assert!(
+            PrepareImageError::TooLarge { base64_bytes: 9 }
+                .to_string()
+                .contains("observed 9 bytes")
+        );
     }
 }

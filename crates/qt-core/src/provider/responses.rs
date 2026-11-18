@@ -626,7 +626,7 @@ pub(crate) async fn stream(
         if kind == ProviderKind::OpenAiCodexResponses {
             bail!("No API key for provider: {}", provider.id);
         }
-        bail!("No API key configured for {}", provider.label);
+        bail!(crate::auth::missing_credential_message(&provider.id));
     }
     let built = build_request(provider, model, kind, request)?;
     let body = serde_json::to_vec(&built.body)?;

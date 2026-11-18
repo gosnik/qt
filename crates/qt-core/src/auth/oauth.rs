@@ -449,9 +449,9 @@ async fn post_json(http: &reqwest::Client, url: &str, body: Value) -> Result<Str
     Ok(text)
 }
 
-fn anthropic_credentials(text: &str, url: &str) -> Result<OAuthCredentials> {
+fn anthropic_credentials(text: &str, url: &str, what: &str) -> Result<OAuthCredentials> {
     let data: Value = serde_json::from_str(text).map_err(|e| {
-        anyhow!("Token exchange returned invalid JSON. url={url}; body={text}; details={e}")
+        anyhow!("{what} returned invalid JSON. url={url}; body={text}; details={e}")
     })?;
     let access = data.get("access_token").and_then(Value::as_str);
     let refresh = data.get("refresh_token").and_then(Value::as_str);
@@ -494,7 +494,7 @@ async fn exchange_anthropic(
             endpoints.redirect_uri
         )
     })?;
-    anthropic_credentials(&text, url)
+    anthropic_credentials(&text, url, "Token exchange")
 }
 
 async fn codex_token(
@@ -589,7 +589,7 @@ pub async fn refresh_with(
             )
             .await
             .map_err(|e| anyhow!("Anthropic token refresh request failed. url={token_url}; details={e}"))?;
-            anthropic_credentials(&text, token_url)
+            anthropic_credentials(&text, token_url, "Anthropic token refresh")
         }
         "openai-codex" => {
             codex_token(
