@@ -77,7 +77,8 @@ review its changes.
 ### Command line
 
 `qt-cli` runs prompts without the window and exits (`qt-cli --help` lists everything). The
-desktop app is the interactive interface; `qt` itself only takes a project directory.
+desktop app is the interactive interface; `qt` takes a project directory plus the session
+flags `-c`, `-r` (resume picker), `--session`, `--fork`, `--no-session` and `--session-dir`.
 
 ```sh
 qt-cli -p "summarise this repository"            # print the final answer

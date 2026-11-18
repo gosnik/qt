@@ -367,6 +367,31 @@ fn cli_flags_select_models_tools_and_sessions() {
     let bad = run(&env, &["--session", "zzzz", "-p", "x"], Some(""));
     assert_eq!(bad.status.code(), Some(1));
     assert!(stderr(&bad).contains("No session found matching 'zzzz'"));
+    // A second saved session makes the bare `native-` prefix ambiguous.
+    let second = run(&env, &["-p", "another session"], Some(""));
+    assert!(second.status.success(), "{}", stderr(&second));
+    let bad = run(&env, &["--session", "native-", "-p", "x"], Some(""));
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(
+        stderr(&bad).starts_with("Error: Session prefix 'native-' is ambiguous; matches: native-"),
+        "{}",
+        stderr(&bad)
+    );
+    let bad = run(&env, &["--fork", "native-", "-p", "x"], Some(""));
+    assert!(stderr(&bad).contains("is ambiguous"), "{}", stderr(&bad));
+    // Without a terminal, --resume resumes the most recent session.
+    let resumed = run(&env, &["--mode", "json", "-r", "resumed"], Some(""));
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let last = server.requests().last().cloned().unwrap();
+    let texts: Vec<String> = last["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .map(|m| m["content"].to_string())
+        .collect();
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[0].contains("another session"), "{texts:?}");
     let bad = run(&env, &["--api-key", "k", "-p", "x"], Some(""));
     assert!(stderr(&bad).contains("--api-key requires a model"));
 

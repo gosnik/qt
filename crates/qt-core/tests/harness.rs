@@ -530,6 +530,28 @@ fn goals_continue_until_the_model_completes_them() {
         .map(|t| t["function"]["name"].as_str().unwrap().to_string())
         .collect();
     assert!(tools.contains(&"update_goal".to_string()));
+    // The completed goal is saved at the save point after the tool turn, so
+    // the next request no longer offers `update_goal`.
+    let second = mock.request(1);
+    assert!(
+        !second["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["function"]["name"] == "update_goal"),
+        "{second}"
+    );
+    let text = std::fs::read_to_string(s.conv.session_path()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let complete = lines
+        .iter()
+        .position(|l| l.contains("\"customType\":\"goal\"") && l.contains("\"complete\""))
+        .expect("completed goal entry");
+    let final_answer = lines
+        .iter()
+        .position(|l| l.contains("All done."))
+        .expect("final answer");
+    assert!(complete < final_answer, "{text}");
     let goal = s.conv.goal().unwrap();
     assert_eq!(goal.status, GoalStatus::Complete);
     // Only responses while the goal was active count (10 in + 2 out).
@@ -540,6 +562,75 @@ fn goals_continue_until_the_model_completes_them() {
     let (out, rx) = reopened.goal_command("").unwrap();
     assert!(rx.is_none());
     assert_eq!(out.lines[1], "Status: complete");
+}
+
+#[test]
+fn runtime_changes_during_a_turn_apply_at_the_next_save_point() {
+    let mock = Mock::start(vec![
+        tool_call("b1", "bash", json!({"command": "sleep 0.5"})),
+        text("after"),
+    ]);
+    let s = setup(&mock, json!({}));
+    let rx = s.conv.prompt("go", Vec::new()).unwrap();
+    // Wait until the tool runs, then change the tool set and thinking level.
+    let rest = s.engine.block_on(async {
+        while let Ok(e) = rx.recv().await {
+            if matches!(e, AgentEvent::ToolStart(_)) {
+                break;
+            }
+        }
+        rx
+    });
+    s.conv.set_tool_enabled("bash", false).unwrap();
+    s.conv.set_thinking(qt_core::provider::ThinkingLevel::High);
+    // Nothing is written mid-turn.
+    let mid = std::fs::read_to_string(s.conv.session_path()).unwrap_or_default();
+    assert!(!mid.contains("tools-config"), "{mid}");
+    drain(&s.engine, rest);
+    let tool_names = |request: &Value| -> Vec<String> {
+        request["tools"]
+            .as_array()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(|t| t["function"]["name"].as_str().unwrap_or("").to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert!(tool_names(&mock.request(0)).contains(&"bash".to_string()));
+    assert!(!tool_names(&mock.request(1)).contains(&"bash".to_string()));
+    // The entries were recorded at the save point after the tool turn:
+    // after the tool result, before the next assistant message.
+    let text = std::fs::read_to_string(s.conv.session_path()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle)).unwrap();
+    let config = at("\"customType\":\"tools-config\"");
+    let thinking = at("\"type\":\"thinking_level_change\"");
+    assert!(at("\"role\":\"toolResult\"") < config, "{text}");
+    assert!(config < at("\"after\""), "{text}");
+    assert!(thinking < at("\"after\""), "{text}");
+    let reopened = s.engine.open_conversation(&s.conv.session_path()).unwrap();
+    assert!(!reopened.active_tools().contains(&"bash".to_string()));
+}
+
+#[test]
+fn goal_time_spent_before_completion_is_kept() {
+    let mock = Mock::start(vec![
+        tool_call("b1", "bash", json!({"command": "sleep 1.2"})),
+        tool_call("g1", "update_goal", json!({"status": "complete"})),
+        text("Finished."),
+    ]);
+    let s = setup(&mock, json!({}));
+    let rx = s.conv.set_goal("wait a moment", None).unwrap().unwrap();
+    drain(&s.engine, rx);
+    let goal = s.conv.goal().unwrap();
+    assert_eq!(goal.status, GoalStatus::Complete);
+    assert!(goal.time_used_seconds >= 1, "{goal:?}");
+    let reopened = s.engine.open_conversation(&s.conv.session_path()).unwrap();
+    let saved = reopened.goal().unwrap();
+    assert_eq!(saved.time_used_seconds, goal.time_used_seconds);
+    assert_eq!(saved.tokens_used, goal.tokens_used);
 }
 
 #[test]

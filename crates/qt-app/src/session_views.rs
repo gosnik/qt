@@ -123,11 +123,21 @@ impl TreePanel {
         let custom = cx
             .new(|cx| InputState::new(window, cx).placeholder("Custom summarization instructions"));
         let label = cx.new(|cx| InputState::new(window, cx).placeholder("Label (optional)"));
-        let subscriptions = vec![cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
-            if matches!(e, InputEvent::Change) {
-                this.refresh(cx);
-            }
-        })];
+        let subscriptions = vec![
+            cx.subscribe(&search, |this, _, e: &InputEvent, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.refresh(cx);
+                }
+            }),
+            // Enter saves the label being edited (Pi's label editor).
+            cx.subscribe_in(&label, window, |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::PressEnter { .. })
+                    && matches!(this.mode, TreeMode::Label { .. })
+                {
+                    this.save_label(false, window, cx);
+                }
+            }),
+        ];
         let mut this = Self {
             selected: None,
             conversation,

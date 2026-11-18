@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use async_channel::Receiver;
@@ -1493,7 +1493,11 @@ impl Conversation {
                 pending_bash: Vec::new(),
                 bash_running: None,
             })),
-            goal: Arc::new(Mutex::new(GoalCell { goal, dirty: false })),
+            goal: Arc::new(Mutex::new(GoalCell {
+                goal,
+                dirty: false,
+                unsaved_usage: false,
+            })),
             engine,
         };
         conversation.engine.hooks().emit_session(&start);
@@ -2134,6 +2138,12 @@ impl Conversation {
             }
             emitter.message(&message);
         }
+        {
+            let mut cell = self.goal.lock().expect("goal lock");
+            if std::mem::take(&mut cell.unsaved_usage) {
+                cell.dirty = true;
+            }
+        }
         self.persist_goal_if_dirty();
         for w in warnings {
             emitter.emit(AgentEvent::Warning(w));
@@ -2176,7 +2186,6 @@ impl Conversation {
                     break;
                 }
             };
-            let started = Instant::now();
             let outcome = self
                 .run_once(
                     params,
@@ -2186,7 +2195,6 @@ impl Conversation {
                     &emitter,
                 )
                 .await;
-            self.account_goal_time(started.elapsed().as_secs() as i64);
             total.add(&outcome.usage);
             if cancel.is_cancelled() {
                 break;
@@ -2233,6 +2241,9 @@ impl Conversation {
         let state = self.state.clone();
         let goal = self.goal.clone();
         let record_emitter = emitter.clone();
+        // Wall time is charged to the goal per assistant message, so time
+        // spent before the model completes the goal is kept.
+        let mut goal_clock = Instant::now();
         let mut record = move |message: &AgentMessage| -> Result<(), String> {
             let mut retry_success = None;
             let mut budget_crossed = None;
@@ -2257,12 +2268,20 @@ impl Conversation {
                             + u.output_tokens
                             + u.cache_read_tokens
                             + u.cache_write_tokens;
+                        let seconds = goal_clock.elapsed().as_secs();
+                        goal_clock += Duration::from_secs(seconds);
                         let mut cell = goal.lock().expect("goal lock");
-                        if let Some(g) = cell.goal.as_mut()
-                            && g.account(0, tokens as i64)
-                        {
-                            budget_crossed = Some(goals::budget_limit_prompt(g));
-                            cell.dirty = true;
+                        if let Some(g) = cell.goal.as_mut() {
+                            let before = (g.tokens_used, g.time_used_seconds);
+                            let crossed = g.account(seconds as i64, tokens as i64);
+                            let changed = before != (g.tokens_used, g.time_used_seconds);
+                            if crossed {
+                                budget_crossed = Some(goals::budget_limit_prompt(g));
+                                cell.dirty = true;
+                            }
+                            if changed {
+                                cell.unsaved_usage = true;
+                            }
                         }
                     }
                     _ => {}
@@ -2313,13 +2332,14 @@ impl Conversation {
         let boundary_emitter = emitter.clone();
         let system_override = system_override.map(str::to_string);
         let mut turn_end = move || -> Option<AgentParams> {
+            // Queue a changed goal first so this save point writes it.
+            me.persist_goal_if_dirty();
             let (warnings, dirty) = {
                 let mut s = me.state.lock().expect("conversation lock");
                 let w = Self::flush_pending(&mut s);
                 let dirty = std::mem::take(&mut s.pending.params_dirty);
                 (w, dirty)
             };
-            me.persist_goal_if_dirty();
             for w in warnings {
                 boundary_emitter.emit(AgentEvent::Warning(w));
             }
@@ -2973,22 +2993,10 @@ impl Conversation {
             if !std::mem::take(&mut cell.dirty) {
                 return;
             }
+            cell.unsaved_usage = false;
             cell.goal.clone()
         };
         let _ = self.persist_goal(goal.as_ref());
-    }
-
-    fn account_goal_time(&self, seconds: i64) {
-        let mut cell = self.goal.lock().expect("goal lock");
-        if let Some(g) = cell.goal.as_mut()
-            && seconds > 0
-        {
-            let before = g.time_used_seconds;
-            g.account(seconds, 0);
-            if g.time_used_seconds != before {
-                cell.dirty = true;
-            }
-        }
     }
 
     /// Set a new active goal and start working on it when idle.
@@ -3006,6 +3014,7 @@ impl Conversation {
             let mut cell = self.goal.lock().expect("goal lock");
             cell.goal = Some(goal.clone());
             cell.dirty = false;
+            cell.unsaved_usage = false;
         }
         self.persist_goal(Some(&goal))?;
         if self.is_running() || !goal.is_active() {
