@@ -247,7 +247,7 @@ impl EpisodeBridge {
                 previous_session_file,
                 ..
             } => {
-                let _ = self.runtime.set_session_context(session_id, session_id);
+                self.runtime.set_session_context(session_id, session_id);
                 self.lifecycle_event(
                     "session_start",
                     json!({
@@ -294,7 +294,7 @@ pub fn attach_memory(
     runtime: Arc<MemoryRuntime>,
     session_id: &str,
 ) -> (Arc<EpisodeBridge>, MemoryHookIds) {
-    let _ = runtime.set_session_context(session_id, session_id);
+    runtime.set_session_context(session_id, session_id);
     let bridge = Arc::new(EpisodeBridge::new(Arc::clone(&runtime), session_id));
     let mut ids = Vec::new();
     let settings = runtime.coordinator().settings();

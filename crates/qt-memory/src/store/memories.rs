@@ -518,6 +518,72 @@ impl Db<'_> {
         Ok(count as usize)
     }
 
+    pub(crate) fn adopt_session_scopes(&self, workspace: &MemoryScope) -> Result<usize> {
+        if workspace.kind != ScopeKind::Exact
+            || !workspace.session.is_empty()
+            || !workspace.agent.is_empty()
+        {
+            return invalid("session scopes can only be adopted into a workspace exact scope");
+        }
+        let target = key(workspace)?;
+        let legacy: Vec<String> = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT scope_key FROM memories WHERE scope_kind='exact' \
+                 AND session_id<>'' AND agent_id=session_id AND task_id='' \
+                 AND conversation_id='' AND user_id=? AND organization_id=? \
+                 AND project_id=? AND repository_id=? AND branch_id=? AND scope_key<>?;",
+            )?
+            .query_map(
+                params![
+                    workspace.user,
+                    workspace.organization,
+                    workspace.project,
+                    workspace.repository,
+                    workspace.branch,
+                    target
+                ],
+                |row| row.get(0),
+            )?
+            .collect::<rusqlite::Result<_>>()?;
+        if legacy.is_empty() {
+            return Ok(0);
+        }
+        let tx = Tx::begin(self.conn, true)?;
+        let mut adopted = 0usize;
+        for old in &legacy {
+            // The trigger on `memories.scope_key` moves the retrieval owner
+            // and queues re-indexing under the new scope.
+            adopted += self.conn.execute(
+                "UPDATE memories SET scope_key=?,session_id='',agent_id='' WHERE scope_key=?;",
+                params![target, old],
+            )?;
+            // Rows that would collide with a row already in the workspace
+            // scope stay behind (`OR IGNORE`): they keep their old key and
+            // remain as unreachable as before.
+            for table in [
+                "memory_revisions",
+                "graph_edges",
+                "procedure_runs",
+                "sources",
+                "source_events",
+                "review_items",
+                "review_actions",
+                "audit_events",
+                "session_events",
+                "context_blocks",
+                "capture_candidate_receipts",
+            ] {
+                self.conn.execute(
+                    &format!("UPDATE OR IGNORE {table} SET scope_key=? WHERE scope_key=?;"),
+                    params![target, old],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(adopted)
+    }
+
     pub(crate) fn retrieval_revision(&self, scope: &MemoryScope, memory_id: &str) -> Result<i64> {
         let memory = self.get(scope, memory_id)?;
         let mut statement = self.conn.prepare_cached(
@@ -1394,6 +1460,19 @@ impl MemoryStore {
     /// Number of memories stored in exactly `scope`.
     pub fn size(&self, scope: &MemoryScope) -> Result<usize> {
         self.with(|db| db.size(scope))
+    }
+
+    /// One-time fix-up for stores written before every front end shared
+    /// [`crate::workspace_memory_scope`]: moves memories (and their
+    /// revisions, edges, sources, reviews, audit and session events, blocks
+    /// and capture receipts) from per-session exact scopes of the same
+    /// workspace into `workspace`. A legacy scope is exact, has the same
+    /// user, organization, project, repository and branch, `session ==
+    /// agent` (non-empty, as the runtimes' `set_session_context(id, id)` set
+    /// them) and no task or conversation. Idempotent; returns the number of
+    /// memories moved.
+    pub fn adopt_session_scopes(&self, workspace: &MemoryScope) -> Result<usize> {
+        self.with(|db| db.adopt_session_scopes(workspace))
     }
 
     /// Current derived-index revision of a memory (bumped by triggers).

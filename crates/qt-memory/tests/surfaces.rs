@@ -480,7 +480,11 @@ fn hooks_capture_runs_and_lifecycle() {
     let hooks = Hooks::new();
     let (bridge, ids) = attach_memory(&hooks, Arc::clone(&runtime), "session-9");
     assert_eq!(ids.0.len(), 3);
-    assert_eq!(runtime.scope().session, "session-9");
+    assert_eq!(runtime.session_context().0, "session-9");
+    assert!(
+        runtime.scope().session.is_empty(),
+        "the session is not a scope dimension"
+    );
     hooks.emit_agent_event(&AgentEvent::AgentStart);
     assert!(runtime.foreground_active());
     hooks.emit_agent_event(&AgentEvent::MessageEnd(Message::user_text(

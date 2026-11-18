@@ -257,6 +257,22 @@ pub fn derive_runtime_memory_scope(cwd: &Path, session: &str, agent: &str) -> Me
     scope
 }
 
+/// The exact scope every front end (desktop app, `qt-cli` print/json/rpc,
+/// `qt memory` subcommands) reads and writes for `cwd`.
+///
+/// It is [`derive_runtime_memory_scope`] over the canonical `cwd` with empty
+/// session and agent dimensions, so it depends only on the working tree: a
+/// memory remembered over RPC, by the agent tool in a print run, from the
+/// `/memory` panel or with `qt memory remember` lands in the same exact
+/// scope, and every front end's status, lists, dashboard and review inbox
+/// count it. (The archived runtimes put the session id into the exact scope
+/// while `qt memory` did not, which stranded memories in one-off session
+/// scopes; see `docs/upstream-compatibility.md`.)
+pub fn workspace_memory_scope(cwd: &Path) -> MemoryScope {
+    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    derive_runtime_memory_scope(&cwd, "", "")
+}
+
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {

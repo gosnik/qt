@@ -34,7 +34,7 @@ use crate::retrieval::{
 };
 use crate::review::{ReviewGovernancePolicy, ReviewInbox, ReviewItemWrite, ReviewService};
 use crate::scope::{
-    derive_runtime_memory_scope, durable_memory_scope, git_directory, repository_root, scope_key,
+    durable_memory_scope, git_directory, repository_root, scope_key, workspace_memory_scope,
 };
 use crate::service::{GovernanceService, LifecyclePolicy, MemoryService};
 use crate::store::{DatabaseOptions, MemoryStore};
@@ -201,6 +201,9 @@ struct PendingEpisode {
 
 struct EpisodeState {
     scope: MemoryScope,
+    /// Current session/agent ids; not part of the derived scope.
+    session: String,
+    agent: String,
     pending: VecDeque<PendingEpisode>,
     pending_keys: HashSet<String>,
     recalled_by_turn: HashMap<u64, BTreeSet<String>>,
@@ -1093,14 +1096,23 @@ impl Shared {
 impl MemoryRuntime {
     /// Opens the store under `options.agent_home` and starts the workers.
     pub fn new(mut options: MemoryRuntimeOptions) -> Result<Self> {
-        let scope = options.initial_scope.clone().unwrap_or_else(|| {
-            derive_runtime_memory_scope(&options.cwd, &options.session, &options.agent)
-        });
+        // Every front end derives the same session-free exact scope for a
+        // working tree; the session only tags evidence (source URIs, events).
+        let derived = options.initial_scope.is_none();
+        let scope = options
+            .initial_scope
+            .clone()
+            .unwrap_or_else(|| workspace_memory_scope(&options.cwd));
         crate::scope::validate_scope(&scope)?;
         let store = Arc::new(MemoryStore::open_with_options(
             &options.agent_home,
             options.database,
         )?);
+        if derived {
+            // Fail-open fix-up of memories earlier builds stranded in
+            // per-session exact scopes of this working tree.
+            let _ = store.adopt_session_scopes(&scope);
+        }
         options.coordinator.agent_home = options.agent_home.to_string_lossy().into_owned();
         options.coordinator.cwd = options.cwd.to_string_lossy().into_owned();
         let retrieval = Arc::new(RetrievalEngine::new(
@@ -1203,6 +1215,8 @@ impl MemoryRuntime {
             store,
             state: Mutex::new(EpisodeState {
                 scope,
+                session: options.session.clone(),
+                agent: options.agent.clone(),
                 pending: VecDeque::new(),
                 pending_keys: HashSet::new(),
                 recalled_by_turn: HashMap::new(),
@@ -1378,22 +1392,24 @@ impl MemoryRuntime {
         }
     }
 
-    /// Switches the session/agent of the scope (new or resumed session).
-    pub fn set_session_context(&self, session: &str, agent: &str) -> Result<()> {
-        let next = {
+    /// Switches the current session/agent (new or resumed session). The
+    /// memory scope stays the working tree's [`workspace_memory_scope`], so
+    /// every session and front end shares one exact scope.
+    pub fn set_session_context(&self, session: &str, agent: &str) {
+        {
             let mut state = self.shared.lock();
-            state.scope.session = session.to_string();
-            state.scope.agent = agent.to_string();
+            state.session = session.to_string();
+            state.agent = agent.to_string();
             state.recalled_by_turn.clear();
             state.last_activity = Instant::now();
-            state.scope.clone()
-        };
-        crate::scope::validate_scope(&next)?;
+        }
         self.shared.condition.notify_all();
-        self.retrieval.set_scope(next.clone())?;
-        self.reviews.set_scope(next.clone());
-        self.coordinator.set_scope(next);
-        Ok(())
+    }
+
+    /// Current `(session, agent)` ids set by [`Self::set_session_context`].
+    pub fn session_context(&self) -> (String, String) {
+        let state = self.shared.lock();
+        (state.session.clone(), state.agent.clone())
     }
 
     /// Remembers memories injected for a turn for later attribution.

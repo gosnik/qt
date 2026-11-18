@@ -427,8 +427,11 @@ fn foreground_and_idle_tracking() {
         !runtime.enqueue_dream_cycle("manual"),
         "no Dreaming controls installed"
     );
-    runtime.set_session_context("s2", "s2").unwrap();
-    assert_eq!(runtime.scope().session, "s2");
+    runtime.set_session_context("s2", "s2");
+    assert_eq!(runtime.session_context(), ("s2".into(), "s2".into()));
+    // The session is not a scope dimension: every session and front end
+    // shares the working tree's scope.
+    assert_eq!(runtime.scope(), workspace_memory_scope(cwd.path()));
     runtime.record_lifecycle_event("session_start", "qt:harness", "{\"reason\":\"new\"}", "");
     assert_eq!(
         runtime
@@ -438,4 +441,97 @@ fn foreground_and_idle_tracking() {
             .len(),
         1
     );
+}
+
+fn git_checkout(dir: &std::path::Path) -> std::path::PathBuf {
+    let root = dir.join("proj");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    root
+}
+
+fn manual(content: &str) -> MemoryWrite {
+    MemoryWrite {
+        content: content.into(),
+        status: MemoryStatus::Hypothesis,
+        source: "user:rpc".into(),
+        provenance: Provenance {
+            source_type: SourceType::Manual,
+            created_by: "user".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn every_session_and_the_memory_cli_share_the_working_tree_scope() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = git_checkout(dir.path());
+    // An RPC/print runtime (one session) remembers a memory...
+    let rpc = runtime(home.path(), &root, None);
+    rpc.set_session_context("rpc-session", "rpc-session");
+    let id = rpc
+        .memories()
+        .remember(&rpc.scope(), manual("Deploys use blue-green switching."))
+        .unwrap();
+    drop(rpc);
+    // ...the desktop app (another session, opened in a subdirectory) and
+    // `qt memory` (no session) derive the same scope and count it.
+    let app = MemoryRuntime::new(MemoryRuntimeOptions {
+        agent_home: home.path().into(),
+        cwd: root.join("src"),
+        session: "app-session".into(),
+        agent: "app-session".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    app.set_session_context("app-session", "app-session");
+    let cli = qt_memory::cli::command_scope(&root, false);
+    assert_eq!(app.scope(), cli);
+    assert_eq!(app.scope(), workspace_memory_scope(&root));
+    assert!(app.scope().session.is_empty() && app.scope().agent.is_empty());
+    assert_eq!(app.statistics().unwrap().memory_entries, 1);
+    assert_eq!(app.memory_count().unwrap(), 1);
+    assert_eq!(app.store().get(&cli, &id).unwrap().id, id);
+}
+
+#[test]
+fn per_session_scopes_of_the_working_tree_are_adopted_on_open() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = git_checkout(dir.path());
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let store = qt_memory::store::MemoryStore::open(home.path()).unwrap();
+    // What earlier builds wrote: the session id as session and agent.
+    let legacy = derive_runtime_memory_scope(&root, "old-session", "old-session");
+    let stranded = store
+        .add(&legacy, manual("Stranded in a session scope."))
+        .unwrap();
+    // Not ours to move: another working tree, and a worker-style scope.
+    let foreign = derive_runtime_memory_scope(&other, "old-session", "old-session");
+    let foreign_id = store.add(&foreign, manual("Another tree.")).unwrap();
+    let worker = derive_runtime_memory_scope(&root, "old-session", "reviewer");
+    let worker_id = store.add(&worker, manual("A worker scope.")).unwrap();
+    drop(store);
+
+    let runtime = runtime(home.path(), &root, None);
+    let workspace = workspace_memory_scope(&root);
+    let moved = runtime.store().get(&workspace, &stranded).unwrap();
+    assert_eq!(moved.scope, workspace);
+    assert_eq!(runtime.statistics().unwrap().memory_entries, 1);
+    assert_eq!(runtime.store().size(&legacy).unwrap(), 0);
+    assert_eq!(
+        runtime.store().get(&foreign, &foreign_id).unwrap().scope,
+        foreign
+    );
+    assert_eq!(
+        runtime.store().get(&worker, &worker_id).unwrap().scope,
+        worker
+    );
+    // Idempotent.
+    assert_eq!(runtime.store().adopt_session_scopes(&workspace).unwrap(), 0);
 }

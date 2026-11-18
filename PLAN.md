@@ -144,6 +144,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] Skill import, offline qtmem import, export/prune/scrub.
 - [ ] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions.
 - [x] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).
+- [x] One memory scope per working tree across front ends: app, `qt-cli` print/json/rpc and `qt memory` all use `workspace_memory_scope(cwd)` (session-free exact scope), so RPC/print/tool memories count in every session's `/memory status`, inbox, dashboard and the CLI; stores with per-session exact scopes of the same tree are folded in on open. Acceptance: `qt-cli/tests/memory_scope.rs` (RPC remember → second RPC session and `qt memory status/recall` from root and subdirectory), `qt-memory/tests/runtime.rs` adoption test. Gap: not re-checked in the GUI on Xvfb (the app uses the same `qt-runtime` path as RPC).
 
 ## Platform
 
