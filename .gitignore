@@ -36,3 +36,4 @@ models/
 *.orig
 *.rej
 .DS_Store
+/.claude/
