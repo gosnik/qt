@@ -742,3 +742,51 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   prompt text. Dropped non-image files insert their paths. Ctrl+G edits the draft in
   `$VISUAL`/`$EDITOR` (Pi's "No editor configured" message; one trailing newline removed);
   GUI editors need a blocking flag such as `code --wait`.
+- **Slash commands:** typing `/` at the start of the composer opens the archived autocomplete
+  popup over the core registry (extension, built-in, prompt-template and `/skill:` commands):
+  case-insensitive substring matches (prefix matches first), else a fuzzy match; rows show
+  `hint - description`. After the name, the core argument providers complete arguments
+  (`/model`, `/thinking`, `/ollama`, `/llama`, `/memory`, `/mcp`, `/subagent`, `/context`,
+  `/goal`). Up/Down select, Tab inserts, Enter inserts and runs a command name (Pi) or inserts
+  an argument, Esc closes. Ctrl/Cmd+K opens a command palette with the same commands; commands
+  whose hint starts with `<` (required arguments) prefill the composer instead of running.
+  Lines are executed by `slash::dispatch`; text output appears as a card in the transcript
+  (`/help`, `/session`, `/status`, `/changelog`, `/name x`, `/model x`, `/reload`, …). Actions
+  open the existing views: settings (and a theme picker for `/settings theme` and `/themes`),
+  a searchable model picker, a thinking picker, tree, resume, fork picker, login, Ollama,
+  import (with the missing-cwd prompt) and quit (`/exit` too, archived alias). `/name` without
+  arguments opens the rename dialog. `/llama`, `/memory`, `/index`, `/mcp`, `/subagent`,
+  `/extensions`, `/skills`, `/prompts` and extension commands show "… is not available in this
+  build." until their panels and the extension runtime are wired. An unknown `/name` is an
+  error card (archived); a first word containing `/` (a path) is sent as a prompt.
+- **`/tools`:** a panel with a checkbox per tool (filter, enable/disable all) persisted through
+  `Conversation::set_tool_enabled` (`tools-config` entry), plus the mutation approval queue:
+  each pending mutation (id, kind, summary, argument preview) can be approved (run with
+  `Engine::execute_approved_mutation`, result shown as a card) or rejected. With the `queue`
+  policy the status bar shows "N pending approvals" (opens the panel); with `execute` the
+  panel says so.
+- **`/context`:** an inspector dialog with section tabs (`all`, environment, prompt, messages,
+  resources, diagnostics, memory, usage) showing `slash::context_lines`, plus refresh and
+  copy. It is refused while a turn runs (archived).
+- **`/export`:** without a path the platform save dialog (`prompt_for_new_path`, default
+  `qt-session-<id>.html` in the project) chooses the file; a name without `.html`/`.jsonl`
+  gets `.html`. When no file-chooser portal is available an in-app path dialog is shown
+  instead. With a path the core command runs directly. `/share`, `/copy`, `/session`,
+  `/status` and `/name` use the core output (cards; `/copy` writes the clipboard).
+- **Prompt history:** the global `history.jsonl` is merged with the session's own prompts
+  (session first, archived `restore_prompt_history`) within `terminal.promptHistoryLimit`
+  and 8 MiB. Up in an empty composer, or on the first line while browsing, shows older
+  entries; Down on the last line goes back to newer entries and finally the unsent draft;
+  editing ends browsing. Every submitted line (prompts, slash commands, `!` commands) is
+  recorded in the session history and appended to `history.jsonl`.
+- **`@` mentions:** `@` at a token start opens path completion over the workspace with the
+  archived scoring (exact name, name prefix, substring, path substring, fuzzy; directories
+  first on ties), using a `.gitignore`-aware walk with hidden files and without `.git` (the
+  archived binary used `fd` with the same rules); at most 50 rows. Paths with spaces are
+  quoted (`@"my dir/file"`), files get a trailing space and directories keep completing.
+  On send, mentions naming existing files are expanded with `input::expand_mentions` (file
+  blocks and images appended, warnings shown as notifications).
+- **User bash:** `!cmd` / `!!cmd` run through `Conversation::run_bash` with a live output card
+  (output tail, spinner); Esc cancels the command before it stops the agent. A second command
+  while one runs is refused with the archived message. Results recorded while the agent runs
+  are shown immediately and not duplicated when the run ends.

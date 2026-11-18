@@ -1,6 +1,13 @@
 //! Root view: session sidebar, header with model controls, transcript,
 //! run indicators, queue, attachments and composer.
 
+mod completion;
+mod composer_ui;
+mod history;
+mod panels;
+mod picker;
+mod slash;
+
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -8,6 +15,13 @@ use std::time::{Duration, Instant};
 use async_channel::Receiver;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use qt_core::message::{AgentMessage, BashExecutionMessage};
+use qt_core::slash::looks_like_command;
+use qt_core::tools::MutationPolicy;
+
+use self::completion::parse_bash;
+use self::composer_ui::{BashRun, CompletionPopup};
+use self::history::PromptHistory;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::searchable_list::SearchableVec;
@@ -59,19 +73,24 @@ actions!(
         QueueFollowUp,
         Dequeue,
         ExternalEditor,
-        RefreshModels
+        RefreshModels,
+        CommandPalette,
+        OpenTools,
+        OpenContext,
+        ExportSession
     ]
 );
 
 const CONTEXT: &str = "QtWorkspace";
 
 pub fn bind_keys(cx: &mut App) {
-    let (new_session, sidebar, settings, resume) = if cfg!(target_os = "macos") {
-        ("cmd-n", "cmd-b", "cmd-,", "cmd-r")
+    let (new_session, sidebar, settings, resume, palette) = if cfg!(target_os = "macos") {
+        ("cmd-n", "cmd-b", "cmd-,", "cmd-r", "cmd-k")
     } else {
-        ("ctrl-n", "ctrl-b", "ctrl-,", "ctrl-r")
+        ("ctrl-n", "ctrl-b", "ctrl-,", "ctrl-r", "ctrl-k")
     };
     cx.bind_keys([
+        KeyBinding::new(palette, CommandPalette, Some(CONTEXT)),
         KeyBinding::new(new_session, NewSession, Some(CONTEXT)),
         KeyBinding::new("escape", StopAgent, Some(CONTEXT)),
         KeyBinding::new(sidebar, ToggleSidebar, Some(CONTEXT)),
@@ -113,6 +132,18 @@ pub struct Workspace {
     quiet_startup: bool,
     settings_view: Option<WeakEntity<SettingsPanel>>,
     focus: FocusHandle,
+    /// The open autocomplete popup.
+    completion: Option<CompletionPopup>,
+    /// Bumped on every refresh so stale path searches are dropped.
+    completion_generation: u64,
+    _completion_task: Option<Task<()>>,
+    history: PromptHistory,
+    /// The running user `!command`.
+    bash: Option<BashRun>,
+    /// `!command` results already shown (skipped when a run re-emits them).
+    shown_bash: Vec<BashExecutionMessage>,
+    /// Mutations waiting for approval (`queue` policy).
+    pending_mutations: usize,
     _event_task: Option<Task<()>>,
     _ticker: Option<Task<()>>,
     _editor_task: Option<Task<()>>,
@@ -127,7 +158,7 @@ impl Workspace {
             TextareaState::new(window, cx)
                 .auto_grow(1, 14)
                 .submit_on_enter(true)
-                .placeholder("Ask qt to read, change or explain code…  (Enter to send, Shift+Enter for a new line, Ctrl+G for $EDITOR)")
+                .placeholder("Ask qt to read, change or explain code…  (/ for commands, @ for files, ! to run a shell command, Ctrl+K for the palette)")
         });
         let initial_items: SearchableVec<ModelItem> = conversation
             .model()
@@ -149,10 +180,10 @@ impl Workspace {
             cx.subscribe_in(
                 &composer,
                 window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter { shift: false, .. } = event {
-                        this.submit(false, window, cx);
-                    }
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { shift: false, .. } => this.submit(false, window, cx),
+                    InputEvent::Change => this.on_composer_changed(window, cx),
+                    _ => {}
                 },
             ),
             cx.subscribe_in(
@@ -162,18 +193,10 @@ impl Workspace {
                     let SelectEvent::Confirm(Some(value)) = event else {
                         return;
                     };
-                    if let Some(model) = ModelRef::parse(value) {
-                        this.conversation.set_model(model.clone());
-                        if let Err(err) = this.engine.set_default_model(&model) {
-                            window.push_notification(
-                                Notification::error(format!(
-                                    "Could not save default model: {err:#}"
-                                )),
-                                cx,
-                            );
-                        }
-                        this.sync_thinking(window, cx);
-                        cx.notify();
+                    if let Some(model) = ModelRef::parse(value)
+                        && this.conversation.model().as_ref() != Some(&model)
+                    {
+                        this.choose_model(model, window, cx);
                     }
                 },
             ),
@@ -221,6 +244,13 @@ impl Workspace {
             quiet_startup: get_bool(&settings, "quietStartup", false),
             settings_view: None,
             focus: cx.focus_handle(),
+            completion: None,
+            completion_generation: 0,
+            _completion_task: None,
+            history: PromptHistory::default(),
+            bash: None,
+            shown_bash: Vec::new(),
+            pending_mutations: 0,
             _event_task: None,
             _ticker: None,
             _editor_task: None,
@@ -230,6 +260,7 @@ impl Workspace {
         this.transcript
             .update(cx, |t, cx| t.set_hide_thinking(hide, cx));
         this.refresh_models(window, cx);
+        this.reload_history(window, cx);
         this.composer
             .update(cx, |state, cx| state.focus(window, cx));
         this
@@ -374,44 +405,39 @@ impl Workspace {
         });
     }
 
-    /// Enter: prompt when idle, steer while running. `follow_up` (Alt+Enter)
-    /// queues a follow-up instead of steering.
+    /// Enter: `!cmd` runs user bash, `/command` runs a slash command, other
+    /// text prompts when idle and steers while running. `follow_up`
+    /// (Alt+Enter) queues a follow-up instead of steering.
     fn submit(&mut self, follow_up: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer_text(cx);
-        if text.trim().is_empty() && self.attachments.is_empty() {
+        let raw = self.composer_text(cx);
+        if raw.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        let (text, images) = prompt_payload(&text, &self.attachments);
-        match self.running {
-            Some(RunKind::Compaction) => {
-                window.push_notification(
-                    Notification::info(
-                        "Compaction in progress — your message stays in the composer.",
-                    ),
-                    cx,
-                );
+        self.completion = None;
+        if self.attachments.is_empty() {
+            if let Some((command, exclude)) = parse_bash(&raw) {
+                if self.run_user_bash(&command, exclude, window, cx) {
+                    self.history_record(&raw, window, cx);
+                    self.clear_composer(window, cx);
+                }
+                cx.notify();
                 return;
             }
-            Some(RunKind::Agent) => {
-                let result = if follow_up {
-                    self.conversation.follow_up(&text, images)
-                } else {
-                    self.conversation.steer(&text, images)
-                };
-                if let Err(err) = result {
-                    window.push_notification(Notification::error(format!("{err:#}")), cx);
-                    return;
-                }
-            }
-            None => {
-                if !self.start(&text, images, window, cx) {
-                    return;
-                }
+            if looks_like_command(&raw) {
+                self.history_record(&raw, window, cx);
+                self.clear_composer(window, cx);
+                self.run_slash(&raw, window, cx);
+                cx.notify();
+                return;
             }
         }
+        let (text, images) = prompt_payload(&raw, &self.attachments);
+        if !self.send_text(&text, images, follow_up, window, cx) {
+            return;
+        }
+        self.history_record(&raw, window, cx);
         self.attachments.clear();
-        self.composer
-            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.clear_composer(window, cx);
         cx.notify();
     }
 
@@ -478,8 +504,21 @@ impl Workspace {
     }
 
     fn on_event(&mut self, event: AgentEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.transcript
-            .update(cx, |t, cx| t.apply_event(&event, cx));
+        let already_shown = matches!(
+            &event,
+            AgentEvent::CustomMessageEnd(AgentMessage::BashExecution(b)) if self.take_shown_bash(b)
+        );
+        if !already_shown {
+            self.transcript
+                .update(cx, |t, cx| t.apply_event(&event, cx));
+        }
+        if self.engine.mutation_policy() == MutationPolicy::Queue {
+            let pending = self.engine.mutation_queue().len();
+            if pending != self.pending_mutations {
+                self.pending_mutations = pending;
+                cx.notify();
+            }
+        }
         match event {
             AgentEvent::Warning(message) => {
                 window.push_notification(Notification::warning(message), cx)
@@ -595,7 +634,13 @@ impl Workspace {
             .update(cx, |t, cx| t.set_user_entry_ids(&ids, cx));
     }
 
+    /// Esc: cancel the running `!command` first, else stop the agent.
     fn stop(&mut self, _: &StopAgent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.conversation.is_bash_running() {
+            self.conversation.abort_bash();
+            cx.notify();
+            return;
+        }
         if self.running.is_some() {
             self.conversation.abort();
             cx.notify();
@@ -687,8 +732,12 @@ impl Workspace {
         {
             conversation.set_model(model);
         }
+        self.conversation.abort_bash();
         self.conversation.shutdown();
         self.conversation = conversation;
+        self.completion = None;
+        self.bash = None;
+        self.reload_history(window, cx);
         self.reload_transcript(cx);
         self.rebuild_model_items(window, cx);
         self.sync_thinking(window, cx);
@@ -1387,12 +1436,17 @@ impl Workspace {
                     .tooltip("Session")
                     .dropdown_menu(move |menu, _, _| {
                         menu.action_context(focus.clone())
+                            .menu("Command palette… (Ctrl/Cmd+K)", Box::new(CommandPalette))
+                            .separator()
                             .menu("Session tree…", Box::new(OpenTree))
                             .menu("Fork from a message…", Box::new(ForkSession))
                             .menu("Clone session", Box::new(CloneSession))
                             .menu("Rename session…", Box::new(RenameSession))
                             .menu("Resume session…", Box::new(OpenResume))
+                            .menu("Export session…", Box::new(ExportSession))
                             .separator()
+                            .menu("Tools and approvals…", Box::new(OpenTools))
+                            .menu("Context inspector…", Box::new(OpenContext))
                             .menu("Compact context…", Box::new(CompactContext))
                             .menu("Goal…", Box::new(OpenGoal))
                             .separator()
@@ -1430,11 +1484,16 @@ impl Workspace {
             parts.push(format!("${:.4}", usage.total_cost_usd));
         }
         let goal = self.conversation.goal();
-        let hint = match self.running {
-            Some(RunKind::Agent) => "Esc to stop · Enter steers · Alt+Enter follows up",
-            Some(RunKind::Compaction) => "Esc to cancel compaction",
-            None => "Enter to send · Shift+Enter for newline",
+        let hint = if self.bash.is_some() {
+            "Esc cancels the shell command"
+        } else {
+            match self.running {
+                Some(RunKind::Agent) => "Esc to stop · Enter steers · Alt+Enter follows up",
+                Some(RunKind::Compaction) => "Esc to cancel compaction",
+                None => "Enter to send · Shift+Enter for newline · ↑ history",
+            }
         };
+        let pending = self.pending_mutations;
         h_flex()
             .w_full()
             .gap_3()
@@ -1442,6 +1501,25 @@ impl Workspace {
             .text_xs()
             .text_color(theme.muted_foreground)
             .child(div().flex_1().child(parts.join(" · ")))
+            .when(pending > 0, |el| {
+                el.child(
+                    div()
+                        .id("pending-mutations")
+                        .px_1p5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .bg(theme.warning.opacity(0.2))
+                        .text_color(theme.warning)
+                        .hover(|s| s.bg(theme.warning.opacity(0.3)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_tools_panel(None, window, cx)
+                        }))
+                        .child(format!(
+                            "{pending} pending approval{}",
+                            if pending == 1 { "" } else { "s" }
+                        )),
+                )
+            })
             .when_some(goal, |el, goal| {
                 el.child(
                     div()
@@ -1580,7 +1658,6 @@ impl Workspace {
     }
 
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let action = if self.running.is_some() {
             Button::new("stop")
                 .icon(IconName::Square)
@@ -1616,35 +1693,62 @@ impl Workspace {
                     .children(self.render_activity(cx))
                     .children(self.render_queue(cx))
                     .child(
-                        v_flex()
-                            .id("composer-box")
+                        div()
+                            .relative()
                             .w_full()
-                            .gap_1()
-                            .p_2()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.background)
-                            .drag_over::<ExternalPaths>(|style, _, _, cx| {
-                                style
-                                    .border_color(cx.theme().primary)
-                                    .bg(cx.theme().primary.opacity(0.06))
-                            })
-                            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                                let paths = paths.paths().to_vec();
-                                this.attach_files(&paths, window, cx);
-                            }))
-                            .children(self.render_attachments(cx))
-                            .child(
-                                h_flex()
+                            .children(self.render_completion(cx).map(|popup| {
+                                div()
+                                    .absolute()
+                                    .bottom_full()
+                                    .left_0()
                                     .w_full()
-                                    .gap_2()
-                                    .items_end()
-                                    .child(div().flex_1().min_w_0().child(textarea))
-                                    .child(action),
-                            ),
+                                    .pb_1()
+                                    .child(popup)
+                            }))
+                            .child(self.render_composer_box(textarea, action, cx)),
                     )
                     .child(self.render_status(cx)),
+            )
+    }
+
+    fn render_composer_box(
+        &self,
+        textarea: Textarea,
+        action: Button,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        v_flex()
+            .id("composer-box")
+            .capture_action(cx.listener(Self::capture_up))
+            .capture_action(cx.listener(Self::capture_down))
+            .capture_action(cx.listener(Self::capture_tab))
+            .capture_action(cx.listener(Self::capture_enter))
+            .capture_action(cx.listener(Self::capture_escape))
+            .w_full()
+            .gap_1()
+            .p_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                style
+                    .border_color(cx.theme().primary)
+                    .bg(cx.theme().primary.opacity(0.06))
+            })
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                let paths = paths.paths().to_vec();
+                this.attach_files(&paths, window, cx);
+            }))
+            .children(self.render_attachments(cx))
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_end()
+                    .child(div().flex_1().min_w_0().child(textarea))
+                    .child(action),
             )
     }
 
@@ -1733,6 +1837,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::dequeue))
             .on_action(cx.listener(Self::external_editor))
             .on_action(cx.listener(Self::refresh_models_action))
+            .on_action(cx.listener(Self::open_palette))
+            .on_action(cx.listener(Self::open_tools_action))
+            .on_action(cx.listener(Self::open_context_action))
+            .on_action(cx.listener(Self::export_action))
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
