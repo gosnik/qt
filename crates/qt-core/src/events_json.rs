@@ -628,6 +628,7 @@ mod tests {
             timestamp: "t".into(),
             cwd: "/c".into(),
             parent_session: None,
+            extra: Default::default(),
         };
         assert_eq!(session_header_json(&header)["type"], "session");
         assert!(s.lines(&AgentEvent::TurnStart).ends_with("}\n"));

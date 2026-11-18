@@ -6,6 +6,7 @@
 mod args;
 mod help;
 mod list_models;
+mod prompting;
 mod rpc;
 mod run;
 mod session;

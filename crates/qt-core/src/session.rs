@@ -46,6 +46,9 @@ pub struct SessionHeader {
     pub cwd: String,
     /// Path of the session this one was forked or cloned from.
     pub parent_session: Option<String>,
+    /// Other header fields (for example a persistent worker's `subagent`
+    /// lineage), kept verbatim when the file is rewritten.
+    pub extra: serde_json::Map<String, Value>,
 }
 
 impl SessionHeader {
@@ -56,6 +59,7 @@ impl SessionHeader {
             timestamp: now_iso(),
             cwd: cwd.to_string_lossy().into_owned(),
             parent_session,
+            extra: serde_json::Map::new(),
         }
     }
 
@@ -70,6 +74,11 @@ impl SessionHeader {
         if let Some(parent) = &self.parent_session {
             v["parentSession"] = json!(parent);
         }
+        if let Some(object) = v.as_object_mut() {
+            for (key, value) in &self.extra {
+                object.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
         v
     }
 
@@ -83,6 +92,21 @@ impl SessionHeader {
             timestamp: str_field(v, "timestamp").unwrap_or_default(),
             cwd: str_field(v, "cwd").unwrap_or_default(),
             parent_session: str_field(v, "parentSession"),
+            extra: v
+                .as_object()
+                .map(|object| {
+                    object
+                        .iter()
+                        .filter(|(key, _)| {
+                            !matches!(
+                                key.as_str(),
+                                "type" | "version" | "id" | "timestamp" | "cwd" | "parentSession"
+                            )
+                        })
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 }
@@ -1633,6 +1657,32 @@ mod tests {
         assert_eq!(listed[0].first_message, "first   question\nhere");
         assert_eq!(listed[0].message_count, 2);
         assert!(list_sessions(dir.path(), Some(Path::new("/elsewhere"))).is_empty());
+    }
+
+    #[test]
+    fn rewrite_keeps_unknown_header_fields() {
+        // A persistent worker's session file is pre-written with a
+        // `subagent` lineage header; the child's first flush rewrites it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session","version":3,"id":"w1","timestamp":"t","cwd":"/p","parentSession":"parent-1","subagent":{"childId":"/root/x","agent":"scout"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let mut s = Session::open(&path).unwrap();
+        s.append_message(&user("task")).unwrap();
+        s.append_message(&assistant("done")).unwrap();
+        let header: Value =
+            serde_json::from_str(fs::read_to_string(&path).unwrap().lines().next().unwrap())
+                .unwrap();
+        assert_eq!(header["id"], "w1");
+        assert_eq!(header["parentSession"], "parent-1");
+        assert_eq!(header["subagent"]["childId"], "/root/x");
+        assert_eq!(header["subagent"]["agent"], "scout");
     }
 
     #[test]

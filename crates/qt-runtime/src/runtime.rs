@@ -110,6 +110,27 @@ fn child_executable(options: &RuntimeOptions) -> PathBuf {
         .unwrap_or_else(qt_subagents::runner::resolve_child_executable)
 }
 
+/// Resolve a bare `--model` id against the live listing of the local
+/// (Ollama) providers: an exact, case-insensitive id match.
+fn resolve_local_model(engine: &Engine, model: &str) -> Option<(ModelRef, Option<ThinkingLevel>)> {
+    let listing = engine.block_on(engine.list_local_models()).ok()?;
+    let argument = crate::options::parse_model_argument(None, model, |_| false);
+    let lookup = |id: &str| {
+        listing.iter().find_map(|(_, result)| {
+            result
+                .as_ref()
+                .ok()?
+                .iter()
+                .find(|m| m.id.eq_ignore_ascii_case(id))
+                .map(|m| m.model_ref())
+        })
+    };
+    // `qwen3.5:9b` is an id, not `qwen3.5` with a thinking suffix.
+    lookup(model.trim())
+        .map(|found| (found, None))
+        .or_else(|| lookup(&argument.model).map(|found| (found, argument.thinking)))
+}
+
 fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|v| {
         let v = v.trim().to_ascii_lowercase();
@@ -430,8 +451,15 @@ impl Runtime {
         }
         let selected = match options.model.as_deref() {
             Some(model) => Some(
-                resolve_model_argument(&providers, options.provider.as_deref(), model)
-                    .map_err(|e| anyhow!(e))?,
+                match resolve_model_argument(&providers, options.provider.as_deref(), model) {
+                    Ok(selection) => selection,
+                    // A bare id of a local (Ollama) model is only known once
+                    // the instance has been listed.
+                    Err(e) if options.provider.is_none() && !options.offline => {
+                        resolve_local_model(&engine, model).ok_or_else(|| anyhow!(e))?
+                    }
+                    Err(e) => return Err(anyhow!(e)),
+                },
             ),
             None => match options.provider.as_deref() {
                 Some(provider) => {

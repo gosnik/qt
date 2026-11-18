@@ -175,8 +175,10 @@ archived C++ qt (`archived/`).
 - **Invalid session files:** a file without a valid header is an error; Pi silently starts
   a fresh session over it. Entries of unknown types, or known types with invalid fields,
   are kept verbatim (they survive rewrites) and reported as diagnostics, never replayed.
-- **Threshold compaction** needs a known context window (from model discovery or
-  `Conversation::set_context_window`); without one only overflow recovery runs. Summaries
+  Unknown header fields (a persistent worker's `subagent` lineage) also survive rewrites.
+- **Threshold compaction** needs a known context window (from model discovery, the
+  provider's configured or catalog model spec, or `Conversation::set_context_window`);
+  without one only overflow recovery runs. Summaries
   are requested with thinking off and `maxOutputTokens` as the model output limit.
 - **Overflow detection** also treats qt's own body-less `HTTP 400/413 …:` transport errors
   as overflow, matching Pi's `4xx (no body)` pattern.
@@ -837,6 +839,19 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
     archived parser assigned it to the flag and failed).
   - `--list-models` also lists models discovered live from ready providers (Ollama, OpenAI,
     OpenRouter) unless `--offline`.
+  - A bare `--model` id that matches no configured model is looked up in the live model
+    lists of the local (Ollama) instances unless `--offline`, so `--model qwen3.5:9b`
+    selects that Ollama model (an exact id wins over reading `:9b` as a thinking suffix;
+    `qwen3.5:9b:high` still sets the level). The archived binary only matched configured
+    models.
+  - Print and JSON modes submit each message the way Pi's `AgentSession.prompt` does (the
+    archived binary sent the text as is): an extension command runs instead of a prompt
+    (output lines and `Extension error (command:<name>): <error>` on stderr), then the
+    `input` hooks run with source `interactive` (handled input starts no run, transformed
+    input replaces the text) and `/template` / `/skill:name` invocations expand.
+  - A conversation's context window falls back to the provider's configured or catalog
+    model spec when the model was never listed, so `ctx.getContextUsage` and threshold
+    auto-compaction work in print/JSON runs.
   - `QT_SUBAGENT_ALLOW_EXTERNAL=0` in subagent children is not applied as a settings
     override (the child's workspace policy comes from its settings).
 

@@ -221,3 +221,84 @@ fn subsystem_commands_answer_without_panels() {
     assert_eq!(run("index", "status")[0], "index status");
     runtime.shutdown(Duration::from_secs(5));
 }
+
+/// A one-instance Ollama stand-in answering `/api/tags` and `/api/show`.
+fn mock_ollama(models: &'static [&'static str]) -> String {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_err() {
+                continue;
+            }
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let response = if request_line.contains("/api/tags") {
+                let listed: Vec<serde_json::Value> = models
+                    .iter()
+                    .map(|m| json!({"name": m, "model": m}))
+                    .collect();
+                json!({ "models": listed })
+            } else {
+                json!({"capabilities": ["completion", "tools"], "model_info": {}})
+            }
+            .to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                response.len()
+            );
+        }
+    });
+    format!("http://{address}")
+}
+
+#[test]
+fn bare_model_ids_resolve_against_live_local_models() {
+    let base = mock_ollama(&["tiny:1b"]);
+    let (_dir, home, work) = setup(json!({
+        "ollama": {"instances": [{"id": "mock", "baseUrl": base}]},
+    }));
+    let build = |model: &str, offline: bool| {
+        let mut opts = options(&home, &work, RunMode::Print);
+        opts.no_memory = true;
+        opts.offline = offline;
+        opts.model = Some(model.into());
+        Runtime::build(opts)
+    };
+    // `tiny:1b` is a model id with a colon, not `tiny` at thinking `1b`.
+    let runtime = build("tiny:1b", false).unwrap();
+    let (model, thinking) = runtime.selected_model().unwrap();
+    assert_eq!(model.to_string(), "ollama:mock/tiny:1b");
+    assert_eq!(thinking, None);
+    runtime.shutdown(Duration::from_secs(5));
+
+    let runtime = build("tiny:1b:high", false).unwrap();
+    let (model, thinking) = runtime.selected_model().unwrap();
+    assert_eq!(model.to_string(), "ollama:mock/tiny:1b");
+    assert_eq!(thinking, Some(qt_core::provider::ThinkingLevel::High));
+    runtime.shutdown(Duration::from_secs(5));
+
+    // Offline runs never query the instance.
+    let error = build("tiny:1b", true).unwrap_err().to_string();
+    assert!(
+        error.starts_with("unknown model selection: tiny"),
+        "{error}"
+    );
+}

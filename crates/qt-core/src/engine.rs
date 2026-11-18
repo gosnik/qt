@@ -904,6 +904,17 @@ impl Engine {
         self.list_models_of(providers)
     }
 
+    /// List the live models of the ready local providers (Ollama instances)
+    /// and remember them, so a bare `--model <ollama id>` resolves.
+    pub fn list_local_models(&self) -> JoinHandle<ModelListing> {
+        let providers: Vec<ProviderConfig> = self
+            .providers()
+            .into_iter()
+            .filter(|p| p.local && p.is_ready())
+            .collect();
+        self.list_models_of(providers)
+    }
+
     fn list_models_of(&self, providers: Vec<ProviderConfig>) -> JoinHandle<ModelListing> {
         let http = self.inner.http.clone();
         let settings = self.settings();
@@ -1003,14 +1014,26 @@ impl Engine {
         models
     }
 
-    /// Known context window of `model`, if discovered.
+    /// Known context window of `model`: the discovered value, else the
+    /// provider's configured or catalog model spec (so print/JSON runs that
+    /// never list models still know it).
     pub fn context_window(&self, model: &ModelRef) -> Option<u64> {
-        self.inner
+        let discovered = self
+            .inner
             .model_info
             .read()
             .expect("model info lock")
             .get(model)
             .and_then(|m| m.context_window)
+            .filter(|w| *w > 0);
+        discovered.or_else(|| {
+            self.provider(&model.provider)?
+                .models
+                .iter()
+                .find(|m| m.id == model.id)
+                .map(|m| m.context_window)
+                .filter(|w| *w > 0)
+        })
     }
 
     /// `enabledModels` resolved against `available` (Pi
