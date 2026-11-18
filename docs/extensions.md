@@ -123,8 +123,11 @@ fn on_input(event) {
 Rhai has no file, network or process access of its own; scripts reach the
 system only through the host API (`pi::exec` runs a process). A runtime that
 another thread is executing rejects entry with
-`extension runtime invocation is reentrant`; nested calls on the same thread
-(component callbacks) are allowed up to depth 8. `print`/`debug` go to stderr
+`extension runtime invocation is reentrant`, unless that thread is waiting in
+`ctx::compact`: then the call (for example the extension's own
+`session_before_compact` / `session_compact` hooks) runs on the waiting thread
+before the compaction continues. Nested calls on the same thread (component
+callbacks, those hooks) are allowed up to depth 8. `print`/`debug` go to stderr
 prefixed with the extension name.
 
 ### Registration API
@@ -175,7 +178,7 @@ archived signature). Failures throw a string that `try { } catch (e) { }` can ca
 | `ctx::getSystemPrompt` | → the system prompt of the next run (before hooks) |
 | `ctx::getContextUsage` | → `{tokens, contextWindow, percent}` (`tokens`/`percent` are `()` when unknown, e.g. right after compaction); `()` without a context window |
 | `ctx::getContext` | → `{systemPrompt, messages, thinkingLevel, model, usage}` (the persisted context, before context hooks) |
-| `ctx::compact` | `{customInstructions}` → `{summary, firstKeptEntryId, tokensBefore, details}`; synchronous and idle-only (`extension runtime mutation requires an idle harness`) |
+| `ctx::compact` | `{customInstructions}` → `{summary, firstKeptEntryId, tokensBefore, details}`; synchronous and idle-only (`extension runtime mutation requires an idle harness`); works from commands, shortcuts and `input` hooks, and the calling extension's compaction hooks run while it waits |
 | `ctx::isIdle`, `ctx::hasPendingMessages`, `ctx::abort` | turn state and cancellation |
 
 Message `content` is a string or an array of `#{type: "text", text}` and
@@ -260,7 +263,11 @@ Handlers run in load order; results marked "chain" feed the next handler.
 Malformed results are reported (`extension <event> hook failed: <name>: <message>`,
 archived wording such as `extension tool_call result field 'block' must be a boolean`)
 and leave the event unchanged. Hooks run synchronously on the engine's threads;
-`ctx::compact` and dialogs are not available there.
+`ctx::compact` and dialogs are not available there (`ctx::compact` from an
+`input` hook works: input hooks run on the submitting thread). Examples:
+`examples/extensions/astra-auto-compact.rhai` (compacts from an `input` hook)
+and `examples/extensions/compact-command.rhai` (`/squash` compacts from a
+command and observes its own compaction hooks).
 
 ## Subprocess extensions
 

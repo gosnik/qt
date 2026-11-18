@@ -590,6 +590,14 @@ documented in [extensions.md](extensions.md).
     entrypoint (the archived loader kept AngelScript manifests as metadata only).
   - Session mutations other than `ctx.compact` are allowed during a run; qt-core
     defers them to the next save point instead of rejecting them.
+  - `ctx.compact` is synchronous and returns the result (archived), where Pi's
+    `ctx.compact(options)` starts the compaction and reports through
+    `onComplete`/`onError`. While it waits, invocations of the calling extension
+    from other threads (its `session_before_compact` / `session_compact` hooks,
+    which qt-core fires on the engine runtime) run on the waiting thread, like the
+    archived host running them nested in `compact_session`; Pi runs them on its
+    event loop after the command yields. Other cross-thread entry is still
+    rejected as `... is reentrant` (Pi would queue it behind the running handler).
   - Lifecycle events are delivered through qt-core hooks. `turn_start`/`turn_end` are
     derived from assistant-response boundaries; `message_end` and `tool_call` results
     can replace the message (same role; Pi `MessageEndEventResult`) and `tool_call`
@@ -1161,9 +1169,12 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
 - **Compaction markers:** the transcript is rebuilt from the session context, so reloaded
   sessions show `[compaction]` and `[branch]` summaries. Besides runs the view pumps, a
   `SessionEvent::Compact`/`Tree` for the current session while idle (for example an
-  extension's `ctx.compact()` from an `input` hook) reloads the transcript live. An
-  extension command calling `ctx.compact()` still fails in the extension runtime with
-  "extension runtime invocation is reentrant" (qt-extensions, not the GUI).
+  extension's `ctx.compact()` from an `input` hook or a command) reloads the transcript
+  live (verified for a `/squash` command on Xvfb 2026-11-18). Gaps: `input` hooks still
+  run on the UI thread, so an `input` hook that compacts (astra-auto-compact) blocks the
+  window until the summary is done, and its marker does not appear live because the
+  prompt starts before the reload listener runs (it skips while a run is shown); it
+  appears on the next reload. Commands run on their own thread.
 - **`@` mentions:** `@` at a token start opens path completion over the workspace with the
   archived scoring (exact name, name prefix, substring, path substring, fuzzy; directories
   first on ties), using a `.gitignore`-aware walk with hidden files and without `.git` (the

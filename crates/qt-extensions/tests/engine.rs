@@ -91,7 +91,13 @@ fn activate() {
     registerCommand("squash", "Squash", "Compact now");
     on("before_agent_start", "on_start");
     on("tool_call", "on_tool_call");
+    on("session_before_compact", "on_before_compact");
+    on("session_compact", "on_compact");
 }
+
+fn on_before_compact(event) { this.before = event.reason; () }
+
+fn on_compact(event) { this.after = event.compactionEntry.summary.contains("SUMMARY OF WORK"); }
 
 fn on_start(event) { #{ systemPrompt: event.systemPrompt + "\nEXTENSION RULE" } }
 
@@ -110,8 +116,9 @@ fn command_setup(args) {
 
 fn command_squash(args) {
     let r = "";
+    this.before = ""; this.after = "";
     try { ctx::compact(#{}); r = "compacted"; } catch (e) { r = "compact failed: " + e; }
-    r
+    r + " before=" + this.before + " after=" + this.after
 }
 "#;
 
@@ -191,9 +198,10 @@ fn hooks_and_host_calls_against_a_real_conversation() {
         |e| matches!(&e.kind, EntryKind::Custom { custom_type, .. } if custom_type == "ext-state")
     ));
 
-    // ctx.compact runs synchronously from a command thread.
+    // ctx.compact runs synchronously from a command thread; the command's
+    // own compaction hooks run (on the command thread) while it waits.
     let squash = ext.run_command("squash", "").unwrap();
-    assert_eq!(squash.lines, ["compacted"]);
+    assert_eq!(squash.lines, ["compacted before=manual after=true"]);
     assert_eq!(requests.lock().unwrap().len(), 3);
     assert!(conv.entries().iter().any(
         |e| matches!(&e.kind, EntryKind::Compaction(c) if c.summary.contains("SUMMARY OF WORK"))
@@ -292,4 +300,69 @@ fn hooks_rewrite_tool_input_messages_and_input() {
         hooks.run_tool_call_chain(&call("read")),
         ToolCallOutcome::Run(json!({"path": "a.txt"}))
     );
+}
+
+/// examples/extensions/compact-command.rhai: `/squash` compacts from a
+/// command while the extension's own compaction hooks run.
+#[test]
+fn compact_command_example_runs_its_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let (port, requests) = serve(vec![text_reply("done"), text_reply("SQUASHED")]);
+    std::fs::write(
+        home.join("settings.json"),
+        json!({
+            "ollama":{"instances":[{"id":"mock","baseUrl":format!("http://127.0.0.1:{port}")}]},
+            "compaction":{"keepRecentTokens":1},
+            "retry":{"enabled":false}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let engine = Engine::new(AgentHome::new(&home), &work).unwrap();
+    let conv = engine.new_conversation(Some(ModelRef::new("ollama:mock", "m")));
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/compact-command.rhai");
+    let loaded = load_extension_roots(
+        &[display_path(&example)],
+        &[],
+        &ExtensionOrigin::Cli,
+        SandboxPolicy::default(),
+    );
+    assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    let ext = Extensions::from_result(DiscoveryOptions::default(), loaded);
+    ext.install_hooks(engine.hooks());
+    ext.set_host(Some(Arc::new(ConversationHost::new(conv.clone()))));
+
+    let rx = conv.prompt("hello", vec![]).unwrap();
+    while rx.recv_blocking().is_ok() {}
+    let out = ext.run_command("squash", "  keep todos ").unwrap();
+    let first_kept = conv
+        .entries()
+        .iter()
+        .find_map(|e| match &e.kind {
+            EntryKind::Compaction(c) => Some(c.first_kept_entry_id.clone()),
+            _ => None,
+        })
+        .expect("compaction entry");
+    assert_eq!(out.lines.len(), 1, "{:?}", out.lines);
+    assert!(
+        out.lines[0].starts_with("Compacted (manual): ")
+            && out.lines[0].ends_with(&format!("kept from {first_kept}.")),
+        "{:?}",
+        out.lines
+    );
+    assert_eq!(requests.lock().unwrap().len(), 2);
+    let state = ext.snapshot().extensions[0]
+        .script
+        .as_ref()
+        .unwrap()
+        .state();
+    assert_eq!(state["pending"], json!(false));
+    assert_eq!(state["reason"], json!("manual"));
+    assert_eq!(state["instructions"], json!("keep todos"));
+    ext.uninstall_hooks();
 }
