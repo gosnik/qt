@@ -338,6 +338,23 @@ pub fn prepare_image(
     }
 }
 
+/// The `read` tool's resize hook backed by [`resize_image`] with the
+/// default limits (installed when `images.autoResize` is on).
+pub fn resize_hook() -> crate::tools::ImageResizeFn {
+    std::sync::Arc::new(|input: &crate::tools::ImageInput| {
+        let engine = base64::engine::general_purpose::STANDARD;
+        let data = base64::Engine::encode(&engine, &input.bytes);
+        let resized = resize_image(&data, &input.mime_type, &ResizeOptions::default())?;
+        let note = format_dimension_note(&resized);
+        let bytes = base64::Engine::decode(&engine, resized.data.as_bytes()).ok()?;
+        Some(crate::tools::ResizedImage {
+            bytes,
+            mime_type: resized.mime_type,
+            dimension_note: note,
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -30,6 +30,8 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `rand` | Session entry ids |
 | `libc` (unix) | Killing a bash process group on timeout or abort; local timezone abbreviation for the prompt's environment block |
 | `notify` | Cross-platform file watching for live theme reload (already in the lock file through GPUI) |
+| `tracing`, `tracing-subscriber` (fmt) | Logging facade for `--log-file` / `--log-stderr` / `--log-level` and `QT_LOG_*` (replaces the archived spdlog sinks); off unless configured |
+| `markdown` | CommonMark + GFM to HTML for `/export` and `/share` (replaces the archived md4c renderer; raw HTML is escaped, unsafe link protocols dropped) |
 | `tempfile` (dev) | Test fixtures |
 
 ## In-process llama.cpp (`qt-llama-sys`, `qt-llama`)

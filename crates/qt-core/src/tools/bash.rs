@@ -11,6 +11,7 @@ use tokio::process::Command;
 
 use super::mutation::{MutationKind, require_approval};
 use super::{Tool, ToolContext, ToolOutput, parse_args};
+use crate::message::BashExecutionMessage;
 use crate::util::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, human_bytes, truncate_tail};
 
 pub struct BashTool;
@@ -169,6 +170,56 @@ impl Tool for BashTool {
             out
         })
     }
+}
+
+/// Run a user `!command` (Pi `executeBash`): the session cwd, the
+/// settings shell and prefix, no workspace confinement and no timeout.
+/// Output is truncated to the last 2000 lines / 50 KB like the tool; the
+/// full output is saved to a temp file when cut.
+pub async fn execute_user_command(command: &str, ctx: &ToolContext) -> BashExecutionMessage {
+    let resolved = match ctx.bash.command_prefix.as_deref() {
+        Some(prefix) if !prefix.is_empty() => format!("{prefix}\n{command}"),
+        _ => command.to_string(),
+    };
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let outcome = run(&resolved, &ctx.cwd, None, ctx, output.clone()).await;
+    let bytes = std::mem::take(&mut *output.lock().unwrap_or_else(|e| e.into_inner()));
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    let mut message = BashExecutionMessage {
+        command: command.to_string(),
+        output: String::new(),
+        exit_code: None,
+        cancelled: false,
+        truncated: false,
+        full_output_path: None,
+        timestamp: crate::message::now_millis(),
+        exclude_from_context: false,
+    };
+    match outcome {
+        Outcome::SpawnFailed(error) => {
+            message.output = error;
+            message.exit_code = Some(127);
+            return message;
+        }
+        Outcome::Exited(info) => {
+            message.exit_code = info
+                .code
+                .map(i64::from)
+                .or(info.signal.map(|s| 128 + i64::from(s)));
+        }
+        Outcome::TimedOut(_) | Outcome::Aborted => message.cancelled = true,
+    }
+    let t = truncate_tail(&raw, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES);
+    message.output = t.text.trim_end_matches('\n').to_string();
+    if t.truncated {
+        message.truncated = true;
+        let path = std::env::temp_dir().join(format!("qt-bash-{}.log", crate::util::short_id()));
+        if std::fs::write(&path, &raw).is_ok() {
+            crate::policy::allow_read_artifact(&path);
+            message.full_output_path = Some(path.display().to_string());
+        }
+    }
+    message
 }
 
 fn timeout_ms(args: &Args) -> Result<Option<u64>, String> {

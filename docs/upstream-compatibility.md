@@ -363,3 +363,89 @@ Pi has no persistent-memory contract; the archived qt is the reference.
 - **Not yet ported:** recall (lexical, graph, dense, code), context rendering, the
   pre-handler, capture/ingestion, post-processing, Dreaming, research, the verifier, memory
   tools, the `qt memory` CLI and the GUI.
+
+## Core integration (`qt-core` engine, settings, slash commands, export, events)
+
+- **Engine composition:** `Engine::builder(home, cwd)` registers static tools, dynamic
+  `ToolSource`s (queried on every run, e.g. MCP proxies after a reconnect), provider
+  backends (`ProviderBackend`), a shared `Hooks` registry, resource options
+  (`--system-prompt`, `--append-system-prompt`, `--skill`, `--prompt-template`, `--theme`,
+  `--no-skills`, `--no-prompt-templates`, `--no-themes`), `--no-context-files`,
+  `ToolSelection` (`--tools`, `--no-tools`, `--no-builtin-tools`), `--offline`,
+  `--session-dir`, `--no-session`, the mutation policy, extra bash environment, web options
+  and startup migrations. `Engine::new` is the builder with defaults. The default tool set
+  is every built-in tool of the archived binary (`ToolRegistry::builtin`), not only Pi's
+  seven coding tools.
+- **Provider backends:** configs returned by a backend carry a `BackendHandle`;
+  `provider::stream` and `provider::list_models` dispatch to it, so llama.cpp and
+  extension providers work in conversation runs, compaction and branch summaries, model
+  listing and the model picker. A backend id equal to a built-in provider replaces it.
+- **Tool runtime:** each run builds a `ToolEnvironment` from settings: the workspace
+  policy (`workspaceRoot`, `allowExternalFilesystemAccess`), the mutation policy and
+  queue, `shellPath` / `shellCommandPrefix` plus builder environment for bash,
+  `images.autoResize` with the `images` resize hook and the model's image support, web
+  options, and the provider call id. The loop now normalises archived argument aliases and
+  applies the output guard to every call (previously only `ToolRegistry::execute` did).
+- **System prompt:** built from `resources::load_resources` (`SYSTEM.md`,
+  `APPEND_SYSTEM.md`, CLI overrides, skills block), the context files, and the
+  environment block with the real workspace root, `shellPath`, offline state, mutation
+  policy and path confinement.
+- **Settings layers:** global `settings.json` (or `settings.yaml` / `settings.yml` when no
+  JSON file exists, archived lookup order) with `<workspace>/.pi/settings.{json,yaml,yml}`
+  deep-merged on top. Project files may only narrow `allowExternalFilesystemAccess` and the
+  `memory.*` keys (archived `merge_project_settings_patch` rules and wording); a violating
+  project file is ignored and reported (`Engine::settings_diagnostics`). Edits always go to
+  the global file. The YAML reader accepts the archived subset (maps, `- ` sequences, `#`
+  comments, quoted scalars) plus flow sequences and block scalars, and types scalars
+  generically except for string-valued keys; the archived reader dropped keys it did not
+  know, qt keeps them. `llama` in YAML is rejected with the archived message.
+- **Migrations:** `oauth.json` / `apiKeys` → `auth.json` (written owner-only), agent-home
+  session files → `sessions/--<cwd>--/`, `tools/` → `bin/`, `commands/` → `prompts/`
+  (archived), plus `defaultProvider: "ollama"` → `ollama:<first instance>` (`ollama:local`
+  without instances); a bare `ollama` model in a session file is mapped the same way.
+- **Slash commands:** registry order extension → built-in → prompt template →
+  `/skill:<name>` with the archived conflict diagnostics and `:<n>` suffixes for duplicate
+  extension commands. `/hotkeys` and `/plan` (terminal-only) are not offered; `/follow-up`
+  (registered by the archived shell without a description) is listed as "Queue a follow-up
+  message for the running turn". The `/index` hint lists only the ported groups. `/help`,
+  `/session`, `/status`, `/context [sections]`, `/name`, `/copy`, `/thinking`, `/model`,
+  `/export`, `/share`, `/follow-up` and `/changelog` use the archived text. `/context`
+  reports instruction files as `reason=session_start` load events and has no prompt-assembly
+  hooks; its memory section comes from `Engine::set_memory_context`. `/import` switches
+  directly (the archived TUI asked for confirmation first; front ends may confirm before
+  dispatching). `/clone` of an empty session is an error. `/compact`, `/context`, `/reload`
+  and mutating `/llama` subcommands are refused while a turn runs (archived list).
+  `/changelog` shows the latest section of the changelog passed to the builder.
+- **User bash:** `Conversation::run_bash` runs `!cmd` in the session cwd with the settings
+  shell and prefix (no workspace confinement, no timeout) and records a `bashExecution`
+  message; while the agent runs the message is held until the run ends (Pi). `!!cmd` sets
+  `excludeFromContext`. Output keeps the last 2000 lines / 50 KB; the full output goes to a
+  temp file. A second command while one runs is refused with the archived message.
+- **`@file` arguments:** Pi `processFileArguments` output (`<file name="…">` blocks,
+  resized images with Pi's dimension note). An image that cannot be resized is replaced by
+  Pi's omitted note and a warning (the archived binary could not resize at startup and
+  worded its warnings around that). `@path` mentions in composer text that name existing
+  files can be expanded with `input::expand_mentions` (Pi only autocompletes them).
+- **Prompt history:** `history.jsonl` exactly as archived (trimmed, deduplicated, 8 MiB,
+  `terminal.promptHistoryLimit` default 500, `flock` on `history.jsonl.lock`, fsynced atomic
+  replace, 0600); writes are synchronous rather than through the archived background
+  writer thread.
+- **Export:** HTML layout, CSS and escaping follow the archived exporter; markdown is
+  rendered by the `markdown` crate (GFM) instead of md4c, so unsafe link protocols become
+  empty `href`s rather than removed anchors. Exports render the in-memory entries (the file
+  may not be written yet). JSONL export writes the header and all entries. `/share` uses
+  `gh` and `PI_SHARE_VIEWER_URL` with the archived messages; the temporary
+  `session.html` lives in a private temp subdirectory.
+- **JSON events:** `events_json::PiEventSerializer` maps `AgentEvent`s to Pi
+  `AgentSessionEvent` lines. `AgentEvent` gained `TurnStart` / `TurnEnd`. Block `*_end`
+  events are synthesised when the next block starts or the message ends; Pi's `done` /
+  `error` stream events are not emitted (Pi does not forward them either). Usage cost is
+  reported only as `cost.total`.
+- **Logging:** `tracing` with the archived options (`--log-file` repeatable,
+  `--log-stderr`, `--log-level`, `QT_LOG_FILE` `:`-separated, `QT_LOG_STDERR`,
+  `QT_LOG_LEVEL`, default `info`, off without sinks, files truncated). `critical` maps to
+  `error`. Lines read `[time] LEVEL target: message fields` instead of spdlog's pattern.
+- **Models:** `/model refresh` and `Engine::start_model_refresh` re-list OpenAI and
+  OpenRouter; `enabledModels` scoping follows Pi `resolveModelScope` (globs with
+  `:level`, exact references, alias preference, warnings). `model_scope::render_model_table`
+  reproduces the archived `--list-models` columns and number formatting.

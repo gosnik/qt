@@ -142,6 +142,8 @@ impl Transcript {
     pub fn apply_event(&mut self, event: &AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::AgentStart
+            | AgentEvent::TurnStart
+            | AgentEvent::TurnEnd { .. }
             | AgentEvent::Warning(_)
             | AgentEvent::AgentEnd { .. }
             | AgentEvent::CustomMessageEnd(_)

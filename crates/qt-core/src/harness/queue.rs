@@ -86,6 +86,16 @@ impl MessageQueues {
         std::mem::take(&mut self.next_turn)
     }
 
+    /// Every queued message: steering, follow-up, then next-turn.
+    pub fn messages(&self) -> Vec<AgentMessage> {
+        self.steering
+            .iter()
+            .chain(self.follow_up.iter())
+            .map(|q| q.message.clone())
+            .chain(self.next_turn.iter().cloned().map(AgentMessage::Custom))
+            .collect()
+    }
+
     pub fn has_queued(&self) -> bool {
         !self.steering.is_empty() || !self.follow_up.is_empty()
     }
