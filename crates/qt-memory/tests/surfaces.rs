@@ -210,6 +210,76 @@ fn cli_remember_recall_status_and_review() {
 }
 
 #[test]
+fn cli_review_operations_reach_durable_scope_reviews() {
+    let env = Env::new();
+    let runtime = env.runtime();
+    let durable = durable_memory_scope(qt_memory::cli::command_scope(env.cwd.path(), false));
+    let subject = runtime
+        .store()
+        .add(
+            &durable,
+            MemoryWrite {
+                content: "Durable hypothesis about deploys".into(),
+                status: MemoryStatus::Hypothesis,
+                source: "test".into(),
+                provenance: Provenance {
+                    source_type: SourceType::File,
+                    source_uri: "file:fixture".into(),
+                    evidence_strength: 0.8,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let review = runtime
+        .store()
+        .add_review(
+            &durable,
+            qt_memory::review::ReviewItemWrite {
+                kind: "candidate_memory".into(),
+                reason: "needs review".into(),
+                subject_id: subject.clone(),
+                provenance: Provenance {
+                    source_type: SourceType::File,
+                    source_uri: "file:evidence".into(),
+                    evidence_strength: 0.9,
+                    created_by: "agent".into(),
+                    ..Default::default()
+                },
+                candidate_json: "{}".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    drop(runtime);
+    let listed = env.cli(&["review", "list"]);
+    assert!(listed.stdout.contains(&review), "{}", listed.stdout);
+    let show = env.cli(&["review", "show", &review, "--json"]);
+    assert_eq!(show.exit_code, 0, "{}", show.stderr);
+    let detail: Value = serde_json::from_str(show.stdout.trim()).unwrap();
+    assert_eq!(detail["review"]["id"], review.as_str());
+    assert_eq!(detail["subject"]["id"], subject.as_str());
+    let preview = env.cli(&["review", "preview", &review, "reject"]);
+    assert_eq!(preview.exit_code, 0, "{}", preview.stderr);
+    let decided = env.cli(&["review", "decide", &review, "reject", "--yes", "--json"]);
+    assert_eq!(decided.exit_code, 0, "{}", decided.stderr);
+    let decided: Value = serde_json::from_str(decided.stdout.trim()).unwrap();
+    assert_eq!(decided["status"], "applied");
+    let history = env.cli(&["review", "history", "--json"]);
+    let history: Value = serde_json::from_str(history.stdout.trim()).unwrap();
+    assert_eq!(history["items"][0]["review_id"], review.as_str());
+    let by_id = env.cli(&["review", "history", &review, "--json"]);
+    let by_id: Value = serde_json::from_str(by_id.stdout.trim()).unwrap();
+    assert_eq!(by_id["items"].as_array().unwrap().len(), 1);
+    let missing = env.cli(&["review", "show", "review_missing"]);
+    assert_eq!(
+        missing.stderr,
+        "qt memory: review item not found in scope\n"
+    );
+}
+
+#[test]
 fn cli_helpers_parse_times_and_import_shapes() {
     assert_eq!(parse_review_time("2h", 1000).unwrap(), 1000 + 7_200_000);
     assert_eq!(

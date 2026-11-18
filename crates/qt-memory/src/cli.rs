@@ -1112,6 +1112,23 @@ fn execute(
     }
 }
 
+/// The scope holding review `id`: the command scope, or its durable
+/// (canonical) scope when the item lives there, as the archived runtime's
+/// `review_detail` / `apply_review_action` fell back. Captured, Dreaming and
+/// consolidation reviews are stored in the durable scope that `review list`
+/// already includes by default.
+fn review_item_scope(store: &MemoryStore, scope: &MemoryScope, id: &str) -> MemoryScope {
+    if store.review(scope, id).is_ok() {
+        return scope.clone();
+    }
+    let durable = durable_memory_scope(scope.clone());
+    if store.review(&durable, id).is_ok() {
+        durable
+    } else {
+        scope.clone()
+    }
+}
+
 fn review(
     parsed: &Parsed,
     store: &MemoryStore,
@@ -1207,18 +1224,36 @@ fn review(
                 return invalid("review show requires a review id");
             }
             out.emit(
-                hydrated_review_json(&reviews.hydrate(scope, &parsed.positional[1])?),
+                hydrated_review_json(&reviews.hydrate(
+                    &review_item_scope(store, scope, &parsed.positional[1]),
+                    &parsed.positional[1],
+                )?),
                 "Memory review detail",
             );
             Ok(0)
         }
         "history" => {
             let id = parsed.positional.get(1).map(String::as_str);
-            let items: Vec<Value> = store
-                .review_history(scope, id, parsed.limit)?
-                .iter()
-                .map(review_action_record_json)
-                .collect();
+            let mut records = match id {
+                Some(id) => store.review_history(
+                    &review_item_scope(store, scope, id),
+                    Some(id),
+                    parsed.limit,
+                )?,
+                None => store.review_history(scope, None, parsed.limit)?,
+            };
+            let durable = durable_memory_scope(scope.clone());
+            if id.is_none() && scope_key(&durable)? != scope_key(scope)? {
+                records.extend(store.review_history(&durable, None, parsed.limit)?);
+                records.sort_by(|left, right| {
+                    right
+                        .created_at
+                        .cmp(&left.created_at)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                records.truncate(parsed.limit);
+            }
+            let items: Vec<Value> = records.iter().map(review_action_record_json).collect();
             out.emit(json!({"items": items}), "Memory review history");
             Ok(0)
         }
@@ -1232,6 +1267,7 @@ fn review(
                 );
             }
             let id = &parsed.positional[1];
+            let scope = &review_item_scope(store, scope, id);
             let mut input = json!({
                 "action": if defer { "defer" } else if reopen { "reopen" } else { parsed.positional[2].as_str() },
                 "note": parsed.note, "target_id": parsed.target_id, "evidence_uri": parsed.evidence_uri,

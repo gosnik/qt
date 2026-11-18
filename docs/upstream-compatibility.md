@@ -407,6 +407,12 @@ Pi has no persistent-memory contract; the archived qt is the reference.
     the interactive 10 000-row history cap and failed for backups (limit 100 000).
   - Lenient JSON readers: a field of the wrong type in an imported document falls back to
     its default instead of aborting the import.
+  - `qt memory review show|preview|decide|defer|reopen|history <id>` fall back to the
+    durable (repository) scope when the review is not in the exact command scope, as the
+    archived runtime's `review_detail` / `apply_review_action` did; the archived CLI
+    looked only in the exact scope, so captured, Dreaming and consolidation reviews that
+    `review list` showed could not be opened or decided. `review history` without an id
+    merges both scopes, newest first.
 - **Wiring:** recall, capture, the memory tools, Dreaming and the `qt-cli memory` command are
   wired by `qt-runtime` (see the composition-root section). The GUI `/memory` panel, Review
   Inbox, settings editor and native dashboard are described in "Governed memory in the
@@ -715,6 +721,9 @@ The archived qt is the reference (`runtime.cpp`, `post_processing_service.cpp`,
     turn.
   - Stopping the Dreaming worker discards all queued cycles (the archive still drained
     manual and threshold cycles with a cancelled child).
+  - The Dreaming worker runs in the desktop app and in `--mode rpc` (the archived RPC
+    runtime processed cycles in its memory worker); print and JSON modes exit before a
+    cycle could run and do not start it.
 
 ## Subagents (`qt-subagents`)
 
@@ -1131,7 +1140,10 @@ memory settings list, `memory_dashboard_server.cpp` and the ImGui/WASM dashboard
   history filters and receipts, and the persisted view state / queue position follow the
   archive. Keys A/E/R/D/S and ↑/↓ work when the inbox has focus. Differences: batches run as
   a background job with a progress line (the archived TUI applied them synchronously);
-  surviving-memory choices list a memory once even when it is both source and subject.
+  surviving-memory choices list a memory once even when it is both source and subject. The
+  landing "Latest Dreaming" line names the newest Dream review by creation time (the
+  archived landing took the first item in queue order, which could be an older decided
+  review).
 - **Dashboard window:** a separate native window (one at a time; reopening focuses it) with
   Overview (health score with the archived penalties, entries, conflicts, pending staleness
   reviews as "Stale", pending reviews, memory mix, trust states, urgent signals, statistics),

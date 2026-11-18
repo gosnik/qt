@@ -204,6 +204,12 @@ impl RpcSession {
             },
         ));
         session.attach(&conversation);
+        // The archived RPC runtime processed Dreaming cycles in its memory
+        // worker, so queued (`memory dream run`) and triggered cycles run
+        // while the RPC process lives.
+        if let Some(memory) = session.runtime.memory() {
+            memory.start_background();
+        }
         session
     }
 
