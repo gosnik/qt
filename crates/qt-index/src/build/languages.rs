@@ -67,6 +67,7 @@ pub(super) fn emulate_npm_projects(
         let sources = index
             .files(ProjectFileKind::TypeScriptSource)
             .iter()
+            .chain(index.files(ProjectFileKind::JavaScriptSource).iter())
             .chain(index.files(ProjectFileKind::VueSource).iter());
         for file in sources {
             if is_ignored_dependency_path(&file.path) {

@@ -234,7 +234,7 @@ impl QueryMode {
     pub fn placeholders(self) -> (&'static str, Option<&'static str>) {
         match self {
             Self::Symbol => (
-                "C/C++ identifier, e.g. ToolRegistry::prepare",
+                "Identifier, e.g. ToolRegistry::prepare or Store.save",
                 Some("File filter (optional)"),
             ),
             Self::Analyze | Self::BuildContext => {

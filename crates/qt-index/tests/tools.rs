@@ -94,7 +94,10 @@ async fn tool_set_and_schemas() {
     }
     let symbol = f.tools.iter().find(|t| t.name() == "symbol").unwrap();
     assert_eq!(symbol.parameters()["properties"]["limit"]["maximum"], 100);
-    assert!(symbol.guidelines()[0].starts_with("For C/C++ class, function, method"));
+    assert!(
+        symbol.guidelines()[0]
+            .starts_with("For C/C++, Rust and TypeScript/JavaScript type, function, method")
+    );
     let router = f.tools.iter().find(|t| t.name() == "index").unwrap();
     assert_eq!(router.parameters()["required"], json!(["action"]));
     let only_router = index_tools(Arc::new(IndexManager::new(f.root.join("h"))), |n| {
@@ -673,4 +676,99 @@ async fn started_service_serves_tools() {
     assert!(service.status().running);
     manager.stop_all();
     assert!(!service.status().running);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_and_typescript_symbols_calls_and_trees() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let root = base.join("project");
+    write(&root, "Cargo.toml", "[package]\nname = \"demo-app\"\n");
+    write(
+        &root,
+        "src/engine.rs",
+        "pub struct Engine;\n\nimpl Engine {\n    pub fn start(&self) {\n        ignite();\n    }\n}\n\nfn ignite() {}\n",
+    );
+    write(
+        &root,
+        "src/main.rs",
+        "mod engine;\n\nfn main() {\n    engine::Engine.start();\n}\n",
+    );
+    write(
+        &root,
+        "web/package.json",
+        "{\"devDependencies\":{\"typescript\":\"5\"}}\n",
+    );
+    write(
+        &root,
+        "web/src/store.ts",
+        "export interface Saver { save(): void }\n\nexport class Store implements Saver {\n  save() { persist(); }\n}\n\nfunction persist() {}\n",
+    );
+    let manager = Arc::new(IndexManager::new(base.join("agent-home")));
+    let f = Fixture {
+        _dir: dir,
+        root,
+        tools: index_tools(manager, |_| true),
+    };
+
+    let out = f.ok("symbol", json!({ "name": "Engine" })).await;
+    let engine = out["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["symbol_kind"] == "struct")
+        .expect("Engine struct");
+    assert_eq!(engine["qualified_name"], "demo_app::engine::Engine");
+    assert_eq!(
+        engine["methods"][0]["qualified_name"],
+        "demo_app::engine::Engine::start"
+    );
+
+    let out = f.ok("symbol", json!({ "name": "Store" })).await;
+    let kinds: Vec<&str> = out["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["symbol_kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["class", "method"]);
+
+    // Inbound edges match a qualified name against the unqualified callee.
+    let out = f
+        .ok(
+            "references",
+            json!({ "symbol": "demo_app::engine::ignite", "direction": "inbound" }),
+        )
+        .await;
+    let callers: Vec<&str> = out["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["caller"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        callers,
+        ["demo_app::engine::Engine::start", "demo_app::main"]
+    );
+
+    let out = f
+        .ok("analyze_file", json!({ "file": "web/src/store.ts" }))
+        .await;
+    let functions: Vec<&str> = out["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["qualified_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(functions, ["Store.save", "persist"]);
+    assert_eq!(out["incoming_calls"][0]["caller"], "Store.save");
+
+    let out = f
+        .ok(
+            "index",
+            json!({ "action": "call", "operation": "code.ast", "arguments": { "file": "src/engine.rs" } }),
+        )
+        .await;
+    let tree = out["output"]["lines"][0]["text"].as_str().unwrap();
+    assert!(tree.starts_with("(source_file (struct_item"), "{tree}");
 }

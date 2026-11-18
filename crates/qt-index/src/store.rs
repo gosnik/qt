@@ -78,14 +78,30 @@ fn create_schema(db: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS project_files(path TEXT PRIMARY KEY, kind TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS compilation_databases(path TEXT PRIMARY KEY);
          CREATE TABLE IF NOT EXISTS build_file_counts(type TEXT PRIMARY KEY, count INTEGER NOT NULL);
-         CREATE TABLE IF NOT EXISTS classes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qualified_name TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS classes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qualified_name TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'class');
          CREATE TABLE IF NOT EXISTS methods(class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE, name TEXT NOT NULL, qualified_name TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS functions(name TEXT NOT NULL, qualified_name TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, kind TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS call_graph(caller TEXT NOT NULL, callee TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS skipped_code_files(file TEXT NOT NULL, reason TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS scan_fingerprints(path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);
          CREATE VIRTUAL TABLE IF NOT EXISTS index_fts USING fts5(path UNINDEXED, kind UNINDEXED, content);",
-    )
+    )?;
+    // Stores written before the Rust/TypeScript index have no type kind.
+    if !column_exists(db, "classes", "kind")? {
+        db.execute_batch("ALTER TABLE classes ADD COLUMN kind TEXT NOT NULL DEFAULT 'class';")?;
+    }
+    Ok(())
+}
+
+fn column_exists(db: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = db.prepare(&format!("PRAGMA table_info({table});"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn get_meta(db: &Connection, key: &str) -> rusqlite::Result<String> {
@@ -249,8 +265,14 @@ fn load_snapshot_inner(
         }
     }
     {
-        let mut classes =
-            tx.prepare("SELECT id, name, qualified_name, file, line FROM classes ORDER BY id;")?;
+        let kind = if column_exists(&tx, "classes", "kind")? {
+            "kind"
+        } else {
+            "'class'"
+        };
+        let mut classes = tx.prepare(&format!(
+            "SELECT id, name, qualified_name, file, line, {kind} FROM classes ORDER BY id;"
+        ))?;
         let mut methods =
             tx.prepare("SELECT name, qualified_name, file, line FROM methods WHERE class_id=?1 ORDER BY rowid;")?;
         let rows = classes.query_map([], |r| {
@@ -260,10 +282,11 @@ fn load_snapshot_inner(
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, i64>(4)?,
+                r.get::<_, String>(5)?,
             ))
         })?;
         let class_rows: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
-        for (id, name, qualified_name, file, line) in class_rows {
+        for (id, name, qualified_name, file, line, kind) in class_rows {
             let method_rows = methods.query_map([id], |r| {
                 Ok(MethodSymbol {
                     name: r.get(0)?,
@@ -277,6 +300,7 @@ fn load_snapshot_inner(
                 qualified_name,
                 file: PathBuf::from(file),
                 line: line.max(0) as usize,
+                kind,
                 methods: method_rows.collect::<rusqlite::Result<_>>()?,
             });
         }
@@ -419,7 +443,7 @@ fn save_inner(
     }
     {
         let mut class_stmt = tx.prepare(
-            "INSERT INTO classes(name, qualified_name, file, line) VALUES(?1, ?2, ?3, ?4);",
+            "INSERT INTO classes(name, qualified_name, file, line, kind) VALUES(?1, ?2, ?3, ?4, ?5);",
         )?;
         let mut method_stmt = tx.prepare(
             "INSERT INTO methods(class_id, name, qualified_name, file, line) VALUES(?1, ?2, ?3, ?4, ?5);",
@@ -430,7 +454,8 @@ fn save_inner(
                 class.name,
                 class.qualified_name,
                 file,
-                class.line as i64
+                class.line as i64,
+                class.kind
             ])?;
             let class_id = tx.last_insert_rowid();
             insert_fts(
@@ -734,6 +759,54 @@ mod tests {
             fts_search_pinned(&database, &root, "", 10, 3),
             Err(FtsError::EmptyQuery)
         );
+    }
+
+    #[test]
+    fn stores_without_a_class_kind_still_load_and_are_upgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/engine.cpp"), "class Engine {};\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "pub trait Run {}\n").unwrap();
+        let scan = scan_project_tree(&root, &Pacer::unpaced()).unwrap();
+        let code_index = build_code_index(&scan, &Pacer::unpaced()).unwrap();
+        let tree_sitter = TreeSitterResult::default();
+        let fingerprints = HashMap::new();
+        let database = root.join("state/index.sqlite3");
+        let data = SnapshotData {
+            scan: &scan,
+            code_index: &code_index,
+            generation: 1,
+            compile_commands: 0,
+            build_metadata_summary: "",
+            tree_sitter: &tree_sitter,
+            scan_fingerprints: &fingerprints,
+        };
+        save_snapshot(&database, &root, &data).unwrap();
+        // Rebuild `classes` in the earlier layout, without `kind`.
+        let db = Connection::open(&database).unwrap();
+        db.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             CREATE TABLE old_classes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qualified_name TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL);
+             INSERT INTO old_classes SELECT id, name, qualified_name, file, line FROM classes;
+             DROP TABLE classes;
+             ALTER TABLE old_classes RENAME TO classes;",
+        )
+        .unwrap();
+        drop(db);
+        let loaded = load_snapshot(&database, &root).unwrap().expect("snapshot");
+        let kinds: Vec<&str> = loaded
+            .code_index
+            .classes
+            .iter()
+            .map(|c| c.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["class", "class"]);
+        // The next save adds the column back.
+        save_snapshot(&database, &root, &data).unwrap();
+        let loaded = load_snapshot(&database, &root).unwrap().expect("snapshot");
+        assert_eq!(loaded.code_index, code_index);
+        assert_eq!(loaded.code_index.classes[1].kind, "trait");
     }
 
     #[test]

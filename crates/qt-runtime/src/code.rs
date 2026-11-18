@@ -1,5 +1,6 @@
 //! Code recall over the project index: a [`CodeSnapshotProvider`] that
-//! projects the index service's scan and C/C++ code index into a memory
+//! projects the index service's scan and code index (C/C++, Rust,
+//! TypeScript/JavaScript) into a memory
 //! [`CodeSnapshot`] (archived `index::RetrievalSnapshot::build`).
 //!
 //! Node ids, the 48-line file windows, the 16-before / 32-after symbol

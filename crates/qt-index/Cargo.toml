@@ -13,6 +13,8 @@ serde_json.workspace = true
 tokio.workspace = true
 tree-sitter.workspace = true
 tree-sitter-cpp.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -491,7 +491,7 @@ pub(super) fn file_analysis_payload(service: &BackgroundService, query: &Query) 
         }
         if functions
             .iter()
-            .any(|f| edge.callee == f.name || edge.callee == f.qualified_name)
+            .any(|f| edge.callee == f.name || matches_symbol(&f.qualified_name, &edge.callee))
         {
             incoming.push(call_json(edge));
         }
@@ -541,7 +541,14 @@ pub(super) fn symbol_payload(service: &BackgroundService, query: &Query) -> OpRe
             && contains_filter(&value, "file", query)
             && path_filter_matches(&value, "file", query)
         {
-            add(value, "class")?;
+            add(
+                value,
+                if class.kind.is_empty() {
+                    "class"
+                } else {
+                    &class.kind
+                },
+            )?;
         }
     }
     for function in &index.functions {
@@ -755,11 +762,27 @@ pub(super) fn search_graph_payload(service: &BackgroundService, query: &Query) -
     Ok(json!({ "results": results, "query": query_json(query) }))
 }
 
+/// `name` and each shorter qualified suffix of it, split at `::` (C/C++,
+/// Rust) or `.` (TypeScript): `a::B::run` → `a::B::run`, `B::run`, `run`.
+fn qualified_suffixes(name: &str) -> impl Iterator<Item = &str> {
+    std::iter::once(name).chain(name.char_indices().filter_map(move |(i, c)| match c {
+        ':' if name[i + 1..].starts_with(':') => Some(&name[i + 2..]),
+        '.' => Some(&name[i + 1..]),
+        _ => None,
+    }))
+}
+
+/// Whether two symbol references name the same function: equal, or one is a
+/// qualified suffix of the other (`ns::Foo::run` and `Foo::run` or `run`;
+/// `Store.save` and `save`). Call edges record the callee as written, often
+/// unqualified, so the match goes both ways.
 fn matches_symbol(candidate: &str, current: &str) -> bool {
-    candidate == current
-        || (candidate.len() > current.len() + 2
-            && candidate.ends_with(current)
-            && candidate[..candidate.len() - current.len()].ends_with("::"))
+    let (long, short) = if candidate.len() >= current.len() {
+        (candidate, current)
+    } else {
+        (current, candidate)
+    };
+    !short.is_empty() && qualified_suffixes(long).any(|suffix| suffix == short)
 }
 
 pub(super) fn trace_call_path_payload(service: &BackgroundService, query: &Query) -> OpResult {
@@ -825,8 +848,8 @@ pub(super) fn dead_code_payload(service: &BackgroundService, query: &Query) -> V
         .iter()
         .filter(|f| {
             f.name != "main"
+                && !qualified_suffixes(&f.qualified_name).any(|suffix| called.contains(suffix))
                 && !called.contains(f.name.as_str())
-                && !called.contains(f.qualified_name.as_str())
         })
         .map(function_json)
         .collect();
@@ -869,6 +892,7 @@ pub(super) fn classes_payload(service: &BackgroundService, query: &Query) -> Val
         .filter(|c| {
             contains_filter(c, "name", query)
                 && contains_filter(c, "qualified_name", query)
+                && contains_filter(c, "kind", query)
                 && contains_filter(c, "file", query)
                 && path_filter_matches(c, "file", query)
         })
@@ -936,5 +960,14 @@ mod tests {
         assert!(matches_symbol("ns::Foo::run", "Foo::run"));
         assert!(!matches_symbol("rerun", "run"));
         assert!(matches_symbol("run", "run"));
+        // Callees recorded unqualified still match a qualified query.
+        assert!(matches_symbol("Foo::run", "ns::Foo::run"));
+        assert!(!matches_symbol("Bar::run", "ns::Foo::run"));
+        // TypeScript qualification.
+        assert!(matches_symbol("Store.save", "save"));
+        assert!(matches_symbol("Util.Store.save", "Store.save"));
+        assert!(!matches_symbol("Store.save", ""));
+        let suffixes: Vec<&str> = qualified_suffixes("a::B.run").collect();
+        assert_eq!(suffixes, ["a::B.run", "B.run", "run"]);
     }
 }
