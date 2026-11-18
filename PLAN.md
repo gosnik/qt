@@ -43,18 +43,18 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 ## Milestone 2: Harness and sessions
 
 - [x] Session entry types: model_change, thinking_level_change, session_info (name), label, branch_summary, compaction, custom_message, custom, bashExecution/custom message roles; v1/v2 → v3 migration; strict validation; stats (tokens, cost, per-model).
-- [ ] Tree: branch, branch_with_summary (model-backed), labels, get_tree, build context from any leaf; GUI tree view (`/tree`).
-- [ ] Fork (from a user message), clone, new, switch, import, missing-cwd prompt; `parentSession` header.
-- [ ] Session catalog: id-prefix resolution, `--session`, `--fork`, `--continue`, `--resume` (GUI picker), `--no-session`, `--session-dir` / `PI_CODING_AGENT_SESSION_DIR` / `sessionDir`.
+- [x] Tree: branch, branch_with_summary (model-backed), labels, get_tree, build context from any leaf; GUI tree view (`/tree`). (Verified end to end 2026-11-18.)
+- [x] Fork (from a user message), clone, new, switch, import, missing-cwd prompt; `parentSession` header. (Verified end to end 2026-11-18.)
+- [x] Session catalog: id-prefix resolution, `--session`, `--fork`, `--continue`, `--resume` (GUI picker), `--no-session`, `--session-dir` / `PI_CODING_AGENT_SESSION_DIR` / `sessionDir`. (Verified end to end 2026-11-18.)
 - [x] Compaction: Pi summary prompts, cut point, split-turn prefix summary, iterative update, read/modified file tracking, `compaction` entry, replay injection; manual `/compact [instructions]`.
 - [x] Auto-compaction on threshold *(unwired)* and overflow recovery (compact + retry once, Pi).
 - [x] Context-overflow detection (phrase list + usage checks).
 - [x] Auto-retry with exponential backoff for transient errors *(unwired)*; provider retry settings, Retry-After.
-- [ ] Steering / follow-up / next-turn queues with `steeringMode` / `followUpMode`; queue events; Enter-while-running steers.
+- [x] Steering / follow-up / next-turn queues with `steeringMode` / `followUpMode`; queue events; Enter-while-running steers. (Verified end to end 2026-11-18.)
 - [x] Parallel tool execution for non-destructive batches *(unwired)*.
 - [x] Hooks pipeline: before_agent_start, context, model-context augmentor, before_provider_request/payload, after_provider_response, tool_call (block), tool_result (rewrite), before_compact, session lifecycle events.
-- [ ] Save points / deferred runtime changes during a turn; active tool set persisted (`tools-config` entry).
-- [ ] Goals (`/goal`): objective, token/time accounting, continuation prompt.
+- [x] Save points / deferred runtime changes during a turn; active tool set persisted (`tools-config` entry). (Verified end to end 2026-11-18.)
+- [x] Goals (`/goal`): objective, token/time accounting, continuation prompt. (Verified end to end 2026-11-18.)
 
 ## Milestone 3: Prompt resources
 
@@ -74,9 +74,9 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - Out of scope (decision 2026-11-18): Google/Vertex, Bedrock, Mistral and the Copilot device flow were serializer-only or unwired in the shipped binary.
 - [x] Built-in model catalog (providers, ~77 models, context/max tokens/pricing/thinking maps); `models.json` overrides incl. `!command` keys; cost calculation incl. service tiers; thinking levels minimal/xhigh with clamping.
 - [x] OpenRouter extras: pricing/metadata, disk cache, credits; image-generation models.
-- [ ] Auth: OAuth PKCE login with localhost callback (anthropic, openai-codex), token refresh *(gap in C++)*, `/login` `/logout` GUI, env-var table (~28 providers), legacy auth.json shapes, `--api-key`.
+- [x] Auth: OAuth PKCE login with localhost callback (anthropic, openai-codex), token refresh *(gap in C++)*, `/login` `/logout` GUI, env-var table (~28 providers), legacy auth.json shapes, `--api-key`. (Verified 2026-11-18 against mock OAuth and provider endpoints; the real Anthropic/OpenAI token endpoints were not called.)
 - [x] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
-- [ ] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`.
+- [x] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`. (Verified end to end 2026-11-18.)
 - [x] In-process llama.cpp via a `qt-llama-sys` crate building the PrismML fork (Vulkan/CPU verified on Linux 2026-11-18: discovery, contextWindow, GPU offload, generation through qt-cli); settings.llama, offload planning, GGUF discovery, tool-call parsing, embeddings, `/llama` panel.
   - [x] `/llama` archived parity: `grammar inline|file|off` runtime override with safe path resolution (shown by `grammar show` and `status`), `run instruct` 8-round framework tool loop (128 tokens/step, repeat suppression, archived lines), `gpu` `useMmap`/`useMlock` and archived errors. Verified with qwen2.5-3B on CPU (`QT_LLAMA_COMMAND_TESTS=1`, `crates/qt-runtime/tests/llama_commands_native.rs`).
 
@@ -101,9 +101,9 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 
 ## Milestone 7: Subagents and MCP
 
-- [ ] Agent definitions (frontmatter, built-in scout/planner/reviewer/worker, user/project scope, trust).
-- [ ] `subagent` tool: single, parallel, chain; child `qt-cli --mode json` processes; depth limits.
-- [ ] Persistent workers: spawn/send/follow_up/wait/interrupt/list, storage, mailbox, completion events, restart recovery, fork snapshots.
+- [x] Agent definitions (frontmatter, built-in scout/planner/reviewer/worker, user/project scope, trust). (Verified end to end 2026-11-18.)
+- [x] `subagent` tool: single, parallel, chain; child `qt-cli --mode json` processes; depth limits. (Verified end to end 2026-11-18.)
+- [x] Persistent workers: spawn/send/follow_up/wait/interrupt/list, storage, mailbox, completion events, restart recovery, fork snapshots. (Verified end to end 2026-11-18.)
 - [x] MCP client: config files and merge order, stdio / streamable-http / sse, sampling, proxy tools `mcp_<server>_<tool>`, resource tools, stderr log; `/mcp` panel.
 
 ## Milestone 8: Modes and CLI
@@ -120,7 +120,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 ## Milestone 9: GUI equivalents of interactive features
 
 - [x] Command palette / slash commands with autocomplete (all built-ins listed in the inventory).
-- [ ] `/settings` panel, `/session` and `/status` info, `/context` inspector, `/export` (HTML + JSONL), `/share` (gist), `/copy`, `/name`, `/changelog`, `/scoped-models` / `enabledModels`, model refresh.
+- [x] `/settings` panel, `/session` and `/status` info, `/context` inspector, `/export` (HTML + JSONL), `/share` (gist), `/copy`, `/name`, `/changelog`, `/scoped-models` / `enabledModels`, model refresh. (Verified end to end 2026-11-18.)
 - [x] Image paste and drop into the composer; prompt history (`history.jsonl`) with Up/Down; external editor.
 - [x] Status line (archived footer: cwd + git branch + session name, `(provider) model • thinking`, OpenRouter credits every 5 min), startup diagnostics as notifications, 5 s memory review notification, live compaction/branch markers after compactions outside the view's runs, `terminal.promptHistoryLimit` in Settings, per-session `promptHistory` header (every submitted line). Verified on Xvfb 2026-11-18. Gap: an extension *command* calling `ctx.compact()` fails with a reentrancy error in `qt-extensions` (input hooks work).
 - [x] HTML export renderer.
