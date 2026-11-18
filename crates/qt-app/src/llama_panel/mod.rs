@@ -15,7 +15,7 @@ use qt_core::provider::ModelRef;
 use qt_runtime::Runtime;
 use qt_runtime::qt_llama::{LlamaSettings, ModelSettings, PROVIDER_ID};
 
-use crate::index_panel::{PanelHooks, output_view, section};
+use crate::index_panel::{OutputSize, PanelHooks, output_view, section};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -222,7 +222,7 @@ impl LlamaPanel {
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = h_flex().gap_1();
+        let mut row = h_flex().gap_1().flex_wrap();
         for tab in Tab::ALL {
             let selected = tab == self.tab;
             row = row.child(
@@ -296,7 +296,8 @@ impl LlamaPanel {
         let mut list = v_flex()
             .id("llama-models")
             .gap_0p5()
-            .max_h(px(240.))
+            .flex_1()
+            .min_h(px(100.))
             .overflow_y_scroll();
         let rows = model_rows(&self.settings, self.selected.as_deref());
         if rows.is_empty() {
@@ -376,6 +377,7 @@ impl LlamaPanel {
             );
         }
         v_flex()
+            .size_full()
             .gap_2()
             .child(list)
             .child(section("DISCOVER LOCAL MODELS", cx))
@@ -533,7 +535,18 @@ impl Render for LlamaPanel {
             Tab::Playground => self.render_playground(cx),
             Tab::Runtime => self.render_runtime(cx),
         };
+        // The model list fills the panel and the output sits under it; the
+        // other tabs are forms that keep their height (scrolling when the
+        // window is short) and leave the rest to the output.
+        let fills = self.tab == Tab::Models;
+        let body = div()
+            .id("llama-body")
+            .min_h_0()
+            .when(fills, |el| el.flex_1().min_h(px(200.)).flex().flex_col())
+            .when(!fills, |el| el.flex_shrink_1().overflow_y_scroll())
+            .child(body);
         v_flex()
+            .size_full()
             .gap_3()
             .child(self.render_tabs(cx))
             .child(body)
@@ -542,7 +555,11 @@ impl Render for LlamaPanel {
                 &self.output,
                 self.error,
                 self.busy.as_deref(),
-                300.,
+                if fills {
+                    OutputSize::Share(0.35)
+                } else {
+                    OutputSize::Fill
+                },
                 cx,
             ))
             .when(!self.output.is_empty(), |el| {
@@ -570,12 +587,9 @@ impl Render for LlamaPanel {
 /// Open the `/llama` panel on `tab`.
 pub fn open(runtime: Runtime, hooks: PanelHooks, tab: Tab, window: &mut Window, cx: &mut App) {
     let panel = cx.new(|cx| LlamaPanel::new(runtime, hooks, tab, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("llama.cpp")
-            .w(px(820.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("llama.cpp"), window, 820., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
 

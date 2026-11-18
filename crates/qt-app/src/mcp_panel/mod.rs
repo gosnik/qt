@@ -16,7 +16,7 @@ use qt_runtime::mcp_commands::{
 };
 use qt_runtime::qt_mcp::{ServerSnapshot, ServerStatus};
 
-use crate::index_panel::{PanelHooks, output_view, section};
+use crate::index_panel::{OutputSize, PanelHooks, output_view, section};
 
 /// A resource row: `(server, uri, name, mime type)`.
 type ResourceRow = (String, String, String, String);
@@ -289,7 +289,12 @@ impl Render for McpPanel {
         let theme = cx.theme().clone();
         let busy = self.busy.is_some();
 
-        let mut list = v_flex().gap_0p5();
+        let mut list = v_flex()
+            .id("mcp-servers")
+            .gap_0p5()
+            .flex_1()
+            .min_h(px(80.))
+            .overflow_y_scroll();
         if self.servers.is_empty() {
             list = list.child(
                 div()
@@ -333,8 +338,11 @@ impl Render for McpPanel {
             );
         }
         let left = v_flex()
+            .id("mcp-left")
             .w(px(220.))
             .flex_none()
+            .h_full()
+            .overflow_y_scroll()
             .gap_2()
             .child(section("SERVERS", cx))
             .child(list)
@@ -386,7 +394,13 @@ impl Render for McpPanel {
                     ),
             );
 
-        let mut right = v_flex().flex_1().min_w_0().gap_2();
+        let mut right = v_flex()
+            .id("mcp-right")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .gap_2();
         if let Some(server) = self.current().cloned() {
             right = right
                 .child(
@@ -396,6 +410,7 @@ impl Render for McpPanel {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(server.name.clone()),
@@ -425,7 +440,8 @@ impl Render for McpPanel {
             let mut tools = v_flex()
                 .id("mcp-tools-list")
                 .gap_0p5()
-                .max_h(px(160.))
+                .flex_1()
+                .min_h(px(100.))
                 .overflow_y_scroll();
             if server.tools.is_empty() {
                 tools = tools.child(
@@ -457,7 +473,8 @@ impl Render for McpPanel {
                 let mut rows = v_flex()
                     .id("mcp-resource-rows")
                     .gap_0p5()
-                    .max_h(px(140.))
+                    .flex_1()
+                    .min_h(px(80.))
                     .overflow_y_scroll();
                 for (i, (server, uri, name, mime)) in self.resources.iter().cloned().enumerate() {
                     let (s, u) = (server.clone(), uri.clone());
@@ -496,14 +513,23 @@ impl Render for McpPanel {
         }
 
         v_flex()
+            .size_full()
             .gap_3()
-            .child(h_flex().gap_4().items_start().child(left).child(right))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h(px(160.))
+                    .gap_4()
+                    .items_stretch()
+                    .child(left)
+                    .child(right),
+            )
             .child(output_view(
                 "mcp-output",
                 &self.output,
                 self.error,
                 self.busy.as_deref(),
-                260.,
+                OutputSize::Share(0.35),
                 cx,
             ))
             .when(!self.output.is_empty(), |el| {
@@ -531,12 +557,9 @@ impl Render for McpPanel {
 /// Open the `/mcp` panel.
 pub fn open(runtime: Runtime, hooks: PanelHooks, window: &mut Window, cx: &mut App) {
     let panel = cx.new(|cx| McpPanel::new(runtime, hooks, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("MCP servers")
-            .w(px(860.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("MCP servers"), window, 860., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
 

@@ -774,8 +774,11 @@ impl Render for OllamaPanel {
         }
 
         let left = v_flex()
+            .id("ollama-left")
             .w(px(250.))
             .flex_none()
+            .h_full()
+            .overflow_y_scroll()
             .gap_2()
             .child(section("INSTANCES", cx))
             .child(list)
@@ -792,13 +795,19 @@ impl Render for OllamaPanel {
                     .on_click(cx.listener(|this, _, w, cx| this.add_instance(w, cx))),
             );
 
-        let mut right = v_flex().flex_1().min_w_0().gap_2();
+        let mut right = v_flex()
+            .id("ollama-right")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .gap_2();
         if let Some(instance) = self.current().cloned() {
             let field = |label: &'static str, input: &Entity<InputState>| {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().w(px(70.)).text_xs().child(label))
+                    .child(div().w(px(70.)).flex_none().text_xs().child(label))
                     .child(div().flex_1().child(Input::new(input).small()))
             };
             right = right
@@ -833,7 +842,8 @@ impl Render for OllamaPanel {
             let mut models = v_flex()
                 .gap_0p5()
                 .id("ollama-models-list")
-                .max_h(px(200.))
+                .flex_1()
+                .min_h(px(100.))
                 .overflow_y_scroll();
             if instance.models.is_empty() {
                 models = models.child(
@@ -899,10 +909,18 @@ impl Render for OllamaPanel {
                 );
         }
 
+        // Under the instance area: as tall as its lines, at most 35% of the
+        // panel.
         let output = v_flex()
             .id("ollama-output")
             .gap_0p5()
-            .max_h(px(180.))
+            .flex_shrink_1()
+            .min_h_0()
+            .max_h(relative(0.35))
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
             .overflow_y_scroll()
             .when_some(self.busy.clone(), |el, label| {
                 el.child(
@@ -927,18 +945,18 @@ impl Render for OllamaPanel {
             }));
 
         v_flex()
+            .size_full()
             .gap_3()
-            .child(h_flex().gap_4().items_start().child(left).child(right))
-            .when(busy || !self.output.is_empty(), |el| {
-                el.child(
-                    div()
-                        .p_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(theme.border)
-                        .child(output),
-                )
-            })
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h(px(160.))
+                    .gap_4()
+                    .items_stretch()
+                    .child(left)
+                    .child(right),
+            )
+            .when(busy || !self.output.is_empty(), |el| el.child(output))
     }
 }
 
@@ -951,12 +969,9 @@ pub fn open(
     cx: &mut App,
 ) {
     let panel = cx.new(|cx| OllamaPanel::new(engine.clone(), http.clone(), on_changed, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Ollama")
-            .w(px(820.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("Ollama"), window, 820., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
 
