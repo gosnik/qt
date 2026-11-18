@@ -1,8 +1,11 @@
+# Rust build output.
+/target/
+
 .pio/
 .codex/
 .idea/
 reference/
-lib/boost_1_86_0/
+/archived/lib/boost_1_86_0/
 __pycache__/
 **/__pycache__/
 *.pyc
@@ -20,6 +23,9 @@ models/
 /.qtindex/
 /.pytest_cache/
 /.cache/
+/archived/.cache/
+/archived/.qtindex/
+/archived/.pytest_cache/
 /.venv/
 /qt-debug.log
 

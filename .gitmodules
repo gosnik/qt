@@ -1,3 +1,3 @@
 [submodule "lib/llama.cpp"]
-	path = lib/llama.cpp
+	path = archived/lib/llama.cpp
 	url = https://github.com/PrismML-Eng/llama.cpp.git

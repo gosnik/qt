@@ -1,0 +1,749 @@
+//! The conversation transcript: a virtualised list of user turns, streamed
+//! markdown, thinking blocks and tool-call cards.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
+use gpui_kit::component::text::{TextView, TextViewState};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use qt_core::AgentEvent;
+use qt_core::message::{
+    AssistantMessage, ContentBlock, Message, StopReason, ToolResultMessage, UserContent,
+};
+use qt_core::provider::StreamEvent;
+use serde_json::Value;
+
+/// Lines of tool output shown while a card is collapsed.
+const PREVIEW_LINES: usize = 6;
+/// Lines of tool output shown while a card is expanded.
+const EXPANDED_LINES: usize = 600;
+const MAX_CONTENT_WIDTH: f32 = 920.;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolStatus {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+struct ToolItem {
+    name: String,
+    args: Value,
+    status: ToolStatus,
+    output: String,
+    diff: Option<String>,
+    images: usize,
+    expanded: bool,
+}
+
+enum Item {
+    User {
+        text: SharedString,
+        images: usize,
+    },
+    Text(Entity<TextViewState>),
+    Thinking {
+        state: Entity<TextViewState>,
+        expanded: bool,
+        streaming: bool,
+    },
+    Tool(ToolItem),
+    Error(SharedString),
+    Notice(SharedString),
+}
+
+pub struct Transcript {
+    items: Vec<Item>,
+    scroller: Entity<MessageScrollerState>,
+    /// Content index of the streaming assistant message -> item index.
+    stream_items: HashMap<usize, usize>,
+    /// Tool call id -> item index.
+    tool_items: HashMap<String, usize>,
+    cwd: PathBuf,
+    _observers: Vec<Subscription>,
+}
+
+impl Transcript {
+    pub fn new(cwd: &Path, cx: &mut Context<Self>) -> Self {
+        Self {
+            items: Vec::new(),
+            scroller: cx.new(|cx| MessageScrollerState::new(0, cx)),
+            stream_items: HashMap::new(),
+            tool_items: HashMap::new(),
+            cwd: cwd.to_path_buf(),
+            _observers: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Replace the transcript with a stored conversation.
+    pub fn load(&mut self, messages: &[Message], cx: &mut Context<Self>) {
+        self.items.clear();
+        self.stream_items.clear();
+        self.tool_items.clear();
+        self._observers.clear();
+        for message in messages {
+            match message {
+                Message::User { content, .. } => self.push_user(content),
+                Message::Assistant(a) => {
+                    for block in &a.content {
+                        match block {
+                            ContentBlock::Text { text } if !text.trim().is_empty() => {
+                                let state = self.markdown_state(text, cx);
+                                self.items.push(Item::Text(state));
+                            }
+                            ContentBlock::Thinking { thinking, .. }
+                                if !thinking.trim().is_empty() =>
+                            {
+                                let state = self.markdown_state(thinking, cx);
+                                self.items.push(Item::Thinking {
+                                    state,
+                                    expanded: false,
+                                    streaming: false,
+                                });
+                            }
+                            ContentBlock::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => self.push_tool(id, name, arguments.clone()),
+                            _ => {}
+                        }
+                    }
+                    self.push_stop_notice(a);
+                }
+                Message::ToolResult(r) => self.apply_tool_result(r),
+            }
+        }
+        // Calls left without a result belong to an interrupted run.
+        for item in &mut self.items {
+            if let Item::Tool(tool) = item
+                && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+            {
+                tool.status = ToolStatus::Failed;
+                tool.output = "No result recorded (run was interrupted).".into();
+            }
+        }
+        let count = self.items.len();
+        self.scroller.update(cx, |s, cx| {
+            s.reset(count, cx);
+            s.scroll_to_end(cx);
+        });
+        cx.notify();
+    }
+
+    pub fn apply_event(&mut self, event: &AgentEvent, cx: &mut Context<Self>) {
+        match event {
+            AgentEvent::AgentStart | AgentEvent::Warning(_) | AgentEvent::AgentEnd { .. } => {}
+            AgentEvent::AssistantStart => self.stream_items.clear(),
+            AgentEvent::Stream(stream) => self.apply_stream(stream, cx),
+            AgentEvent::MessageEnd(Message::User { content, .. }) => {
+                self.push_user(content);
+                self.appended(1, cx);
+                self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
+            }
+            AgentEvent::MessageEnd(Message::Assistant(a)) => self.finish_assistant(a, cx),
+            AgentEvent::MessageEnd(Message::ToolResult(r)) => {
+                self.apply_tool_result(r);
+                self.changed(self.tool_items.get(&r.tool_call_id).copied(), cx);
+            }
+            AgentEvent::ToolStart(exec) => {
+                let index = self.tool_items.get(&exec.id).copied();
+                if let Some(Item::Tool(tool)) = index.and_then(|i| self.items.get_mut(i)) {
+                    tool.status = ToolStatus::Running;
+                    tool.args = exec.args.clone();
+                }
+                self.changed(index, cx);
+            }
+            AgentEvent::ToolProgress { id, output } => {
+                let index = self.tool_items.get(id).copied();
+                if let Some(Item::Tool(tool)) = index.and_then(|i| self.items.get_mut(i)) {
+                    tool.output = output.clone();
+                }
+                self.changed(index, cx);
+            }
+        }
+    }
+
+    fn apply_stream(&mut self, event: &StreamEvent, cx: &mut Context<Self>) {
+        match event {
+            StreamEvent::BlockStart { index, block } => {
+                let item = match block {
+                    ContentBlock::Text { text } => Item::Text(self.markdown_state(text, cx)),
+                    ContentBlock::Thinking { thinking, .. } => Item::Thinking {
+                        state: self.markdown_state(thinking, cx),
+                        expanded: false,
+                        streaming: true,
+                    },
+                    ContentBlock::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } => {
+                        self.push_tool(id, name, arguments.clone());
+                        self.stream_items.insert(*index, self.items.len() - 1);
+                        self.appended(1, cx);
+                        return;
+                    }
+                    ContentBlock::Image { .. } => return,
+                };
+                self.items.push(item);
+                self.stream_items.insert(*index, self.items.len() - 1);
+                self.appended(1, cx);
+            }
+            StreamEvent::TextDelta { index, delta }
+            | StreamEvent::ThinkingDelta { index, delta } => {
+                let item_index = self.stream_items.get(index).copied();
+                let state = match item_index.and_then(|i| self.items.get(i)) {
+                    Some(Item::Text(state)) | Some(Item::Thinking { state, .. }) => state.clone(),
+                    _ => return,
+                };
+                state.update(cx, |s, cx| s.push_str(delta, cx));
+                self.changed(item_index, cx);
+            }
+            StreamEvent::ToolArgsDelta { .. } => {}
+        }
+    }
+
+    fn finish_assistant(&mut self, message: &AssistantMessage, cx: &mut Context<Self>) {
+        let before = self.items.len();
+        for (index, block) in message.content.iter().enumerate() {
+            let Some(&item_index) = self.stream_items.get(&index) else {
+                continue;
+            };
+            match (self.items.get_mut(item_index), block) {
+                (Some(Item::Tool(tool)), ContentBlock::ToolCall { arguments, .. }) => {
+                    tool.args = arguments.clone()
+                }
+                (Some(Item::Thinking { streaming, .. }), _) => *streaming = false,
+                _ => {}
+            }
+        }
+        self.stream_items.clear();
+        self.push_stop_notice(message);
+        let added = self.items.len() - before;
+        if added > 0 {
+            self.appended(added, cx);
+        }
+        cx.notify();
+    }
+
+    fn push_stop_notice(&mut self, message: &AssistantMessage) {
+        match message.stop_reason {
+            StopReason::Error => self.items.push(Item::Error(
+                message
+                    .error_message
+                    .clone()
+                    .unwrap_or_else(|| "The request failed.".into())
+                    .into(),
+            )),
+            StopReason::Aborted => self.items.push(Item::Notice("Stopped.".into())),
+            StopReason::Length => self
+                .items
+                .push(Item::Notice("Response hit the output token limit.".into())),
+            StopReason::Stop | StopReason::ToolCall => {}
+        }
+    }
+
+    fn push_user(&mut self, content: &UserContent) {
+        let images = match content {
+            UserContent::Blocks(blocks) => blocks
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                .count(),
+            UserContent::Text(_) => 0,
+        };
+        self.items.push(Item::User {
+            text: content.plain_text().into(),
+            images,
+        });
+    }
+
+    fn push_tool(&mut self, id: &str, name: &str, args: Value) {
+        self.items.push(Item::Tool(ToolItem {
+            name: name.to_string(),
+            args,
+            status: ToolStatus::Pending,
+            output: String::new(),
+            diff: None,
+            images: 0,
+            expanded: false,
+        }));
+        self.tool_items.insert(id.to_string(), self.items.len() - 1);
+    }
+
+    fn apply_tool_result(&mut self, result: &ToolResultMessage) {
+        let Some(&index) = self.tool_items.get(&result.tool_call_id) else {
+            return;
+        };
+        let Some(Item::Tool(tool)) = self.items.get_mut(index) else {
+            return;
+        };
+        tool.status = if result.is_error {
+            ToolStatus::Failed
+        } else {
+            ToolStatus::Done
+        };
+        tool.output = result.text();
+        tool.images = result
+            .content
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::Image { .. }))
+            .count();
+        tool.diff = result
+            .details
+            .as_ref()
+            .and_then(|d| d.get("diff"))
+            .and_then(Value::as_str)
+            .filter(|d| !d.is_empty())
+            .map(str::to_string);
+        tool.expanded = result.is_error;
+    }
+
+    fn markdown_state(&mut self, text: &str, cx: &mut Context<Self>) -> Entity<TextViewState> {
+        let state = cx.new(|cx| TextViewState::markdown(text, cx).selectable(true));
+        self.observe_text(&state, cx);
+        state
+    }
+
+    /// Re-measure the row when its markdown finishes (re)parsing.
+    fn observe_text(&mut self, state: &Entity<TextViewState>, cx: &mut Context<Self>) {
+        let index = self.items.len();
+        let subscription = cx.observe(state, move |this, _, cx| this.changed(Some(index), cx));
+        self._observers.push(subscription);
+    }
+
+    fn appended(&mut self, count: usize, cx: &mut Context<Self>) {
+        self.scroller.update(cx, |s, cx| {
+            s.append(count, cx);
+        });
+        cx.notify();
+    }
+
+    fn changed(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        if let Some(i) = index.filter(|i| *i < self.items.len()) {
+            self.scroller.update(cx, |s, cx| {
+                s.remeasure_items(i..i + 1, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn toggle(&mut self, index: usize, cx: &mut Context<Self>) {
+        match self.items.get_mut(index) {
+            Some(Item::Tool(tool)) => tool.expanded = !tool.expanded,
+            Some(Item::Thinking { expanded, .. }) => *expanded = !*expanded,
+            _ => return,
+        }
+        self.changed(Some(index), cx);
+    }
+
+    fn render_item(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let body: AnyElement = match &self.items[index] {
+            Item::User { text, images } => {
+                let mut lines = v_flex().gap_0p5().text_sm();
+                for line in text.split('\n') {
+                    lines = lines.child(
+                        div()
+                            .min_h(px(18.))
+                            .child(SharedString::from(line.to_string())),
+                    );
+                }
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .child(
+                        v_flex()
+                            .max_w(relative(0.85))
+                            .gap_1()
+                            .px_4()
+                            .py_2p5()
+                            .rounded_lg()
+                            .bg(theme.secondary)
+                            .text_color(theme.secondary_foreground)
+                            .child(lines)
+                            .when(*images > 0, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!("{images} image(s) attached")),
+                                )
+                            }),
+                    )
+                    .into_any_element()
+            }
+            Item::Text(state) => div()
+                .w_full()
+                .text_sm()
+                .child(TextView::new(state).selectable(true))
+                .into_any_element(),
+            Item::Thinking {
+                state,
+                expanded,
+                streaming,
+            } => {
+                let expanded = *expanded;
+                let label = if *streaming {
+                    "Thinking…"
+                } else {
+                    "Thought process"
+                };
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .id(("thinking", index))
+                            .gap_1p5()
+                            .items_center()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(theme.foreground))
+                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
+                            .child(
+                                Icon::new(if expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .xsmall(),
+                            )
+                            .child(label),
+                    )
+                    .when(expanded, |el| {
+                        el.child(
+                            div()
+                                .pl_4()
+                                .ml_1()
+                                .border_l_2()
+                                .border_color(theme.border)
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(TextView::new(state).selectable(true)),
+                        )
+                    })
+                    .into_any_element()
+            }
+            Item::Tool(tool) => self.render_tool(tool, index, &theme, cx),
+            Item::Error(message) => h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.danger)
+                .text_sm()
+                .text_color(theme.danger)
+                .child(Icon::new(IconName::TriangleAlert).small())
+                .child(div().flex_1().child(message.clone()))
+                .into_any_element(),
+            Item::Notice(text) => h_flex()
+                .w_full()
+                .justify_center()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(text.clone())
+                .into_any_element(),
+        };
+        h_flex()
+            .w_full()
+            .justify_center()
+            .px_6()
+            .py_1p5()
+            .child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).child(body))
+            .into_any_element()
+    }
+
+    fn render_tool(
+        &self,
+        tool: &ToolItem,
+        index: usize,
+        theme: &component::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (icon, color) = match tool.status {
+            ToolStatus::Pending | ToolStatus::Running => {
+                (IconName::LoaderCircle, theme.muted_foreground)
+            }
+            ToolStatus::Done => (IconName::CircleCheck, theme.success),
+            ToolStatus::Failed => (IconName::CircleX, theme.danger),
+        };
+        let summary = tool_summary(&tool.name, &tool.args, &self.cwd);
+        let running = matches!(tool.status, ToolStatus::Pending | ToolStatus::Running);
+        let show_body =
+            tool.expanded || running || tool.diff.is_some() || tool.status == ToolStatus::Failed;
+        let header = h_flex()
+            .id(("tool", index))
+            .w_full()
+            .gap_2()
+            .items_center()
+            .px_3()
+            .py_1p5()
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.muted))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(index, cx)))
+            .child(Icon::new(icon).small().text_color(color))
+            .child(
+                div()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(tool.name.clone()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(summary),
+            )
+            .child(
+                Icon::new(if tool.expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .xsmall()
+                .text_color(theme.muted_foreground),
+            );
+
+        let body = if !show_body || (tool.output.trim().is_empty() && tool.diff.is_none()) {
+            None
+        } else if let Some(diff) = &tool.diff {
+            Some(self.render_diff(diff, tool.expanded, theme))
+        } else {
+            let tail = tool.name == "bash";
+            let limit = if tool.expanded {
+                EXPANDED_LINES
+            } else {
+                PREVIEW_LINES
+            };
+            Some(render_output(&tool.output, limit, tail, tool.images, theme))
+        };
+
+        v_flex()
+            .w_full()
+            .rounded_md()
+            .border_1()
+            .border_color(if tool.status == ToolStatus::Failed {
+                theme.danger.opacity(0.5)
+            } else {
+                theme.border
+            })
+            .overflow_hidden()
+            .child(header)
+            .children(body.map(|b| div().border_t_1().border_color(theme.border).child(b)))
+            .into_any_element()
+    }
+
+    fn render_diff(&self, diff: &str, expanded: bool, theme: &component::Theme) -> AnyElement {
+        let lines: Vec<&str> = diff
+            .lines()
+            .filter(|l| !l.starts_with("---") && !l.starts_with("+++"))
+            .collect();
+        let limit = if expanded { EXPANDED_LINES } else { 40 };
+        let mut col = v_flex()
+            .w_full()
+            .py_1()
+            .font_family(theme.mono_font_family.clone())
+            .text_xs();
+        for line in lines.iter().take(limit) {
+            let (bg, fg) = if line.starts_with('+') {
+                (theme.success.opacity(0.12), theme.foreground)
+            } else if line.starts_with('-') {
+                (theme.danger.opacity(0.12), theme.foreground)
+            } else if line.starts_with("@@") {
+                (theme.transparent, theme.info)
+            } else {
+                (theme.transparent, theme.muted_foreground)
+            };
+            col = col.child(
+                div()
+                    .w_full()
+                    .px_3()
+                    .bg(bg)
+                    .text_color(fg)
+                    .child(SharedString::from(line.to_string())),
+            );
+        }
+        if lines.len() > limit {
+            col = col.child(
+                div()
+                    .px_3()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("… {} more lines", lines.len() - limit)),
+            );
+        }
+        col.into_any_element()
+    }
+}
+
+fn render_output(
+    output: &str,
+    limit: usize,
+    tail: bool,
+    images: usize,
+    theme: &component::Theme,
+) -> AnyElement {
+    let lines: Vec<&str> = output.lines().collect();
+    let hidden = lines.len().saturating_sub(limit);
+    let shown: &[&str] = if tail {
+        &lines[hidden..]
+    } else {
+        &lines[..lines.len().min(limit)]
+    };
+    let mut col = v_flex()
+        .w_full()
+        .px_3()
+        .py_1p5()
+        .font_family(theme.mono_font_family.clone())
+        .text_xs()
+        .text_color(theme.muted_foreground);
+    let more = |n: usize| {
+        div()
+            .italic()
+            .child(format!("… {n} more lines (click header to expand)"))
+    };
+    if tail && hidden > 0 {
+        col = col.child(more(hidden));
+    }
+    for line in shown {
+        col = col.child(
+            div()
+                .min_h(px(16.))
+                .child(SharedString::from(qt_core::util::shorten(line, 400))),
+        );
+    }
+    if !tail && hidden > 0 {
+        col = col.child(more(hidden));
+    }
+    if images > 0 {
+        col = col.child(div().child(format!("[{images} image(s) returned]")));
+    }
+    col.into_any_element()
+}
+
+/// Short description of a tool call for its card header.
+fn tool_summary(name: &str, args: &Value, cwd: &Path) -> SharedString {
+    let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or_default();
+    let path = |k: &str| {
+        let p = s(k);
+        Path::new(p)
+            .strip_prefix(cwd)
+            .map(|r| r.display().to_string())
+            .unwrap_or_else(|_| p.to_string())
+    };
+    let text = match name {
+        "bash" => format!("$ {}", s("command").lines().next().unwrap_or_default()),
+        "read" => {
+            let mut t = path("path");
+            if let Some(o) = args.get("offset").and_then(Value::as_u64) {
+                t.push_str(&format!(":{o}"));
+            }
+            t
+        }
+        "edit" => {
+            let n = args
+                .get("edits")
+                .and_then(Value::as_array)
+                .map_or(1, Vec::len);
+            format!(
+                "{} ({n} edit{})",
+                path("path"),
+                if n == 1 { "" } else { "s" }
+            )
+        }
+        "write" => path("path"),
+        "ls" => {
+            let p = path("path");
+            if p.is_empty() { ".".into() } else { p }
+        }
+        "grep" | "find" => {
+            let p = path("path");
+            if p.is_empty() {
+                s("pattern").to_string()
+            } else {
+                format!("{} in {p}", s("pattern"))
+            }
+        }
+        _ => match args {
+            Value::Null => String::new(),
+            other => other.to_string(),
+        },
+    };
+    qt_core::util::shorten(&text, 200).into()
+}
+
+impl Render for Transcript {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        MessageScroller::new(
+            "transcript",
+            self.scroller.clone(),
+            move |index, window, cx| {
+                this.update(cx, |this, cx| {
+                    if index < this.items.len() {
+                        this.render_item(index, window, cx)
+                    } else {
+                        div().into_any_element()
+                    }
+                })
+                .unwrap_or_else(|_| div().into_any_element())
+            },
+        )
+        .jump_button(true)
+        .size_full()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the gpui glob import would shadow `#[test]`.
+    use super::tool_summary;
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn summaries_are_relative_and_compact() {
+        let cwd = Path::new("/work");
+        assert_eq!(
+            tool_summary("read", &json!({"path": "/work/src/a.rs", "offset": 5}), cwd).as_ref(),
+            "src/a.rs:5"
+        );
+        assert_eq!(
+            tool_summary("bash", &json!({"command": "ls\nmore"}), cwd).as_ref(),
+            "$ ls"
+        );
+        assert_eq!(
+            tool_summary("edit", &json!({"path": "x", "edits": [{}, {}]}), cwd).as_ref(),
+            "x (2 edits)"
+        );
+        assert_eq!(
+            tool_summary("grep", &json!({"pattern": "fn", "path": "src"}), cwd).as_ref(),
+            "fn in src"
+        );
+        assert_eq!(tool_summary("ls", &json!({}), cwd).as_ref(), ".");
+    }
+}

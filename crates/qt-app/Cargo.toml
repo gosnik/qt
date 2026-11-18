@@ -1,0 +1,16 @@
+[package]
+name = "qt-app"
+description = "qt coding agent: GPUI desktop application"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "qt"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+gpui-kit.workspace = true
+qt-core.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,94 @@
+//! qt desktop application.
+
+mod keys_dialog;
+mod model_picker;
+mod transcript;
+mod workspace;
+
+use std::path::PathBuf;
+
+use anyhow::{Context as _, Result};
+use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::*;
+use qt_core::{AgentHome, Engine};
+
+use crate::workspace::Workspace;
+
+const USAGE: &str = "Usage: qt [--cwd <dir> | <dir>]\n\nOpens the qt desktop app for a project directory (default: current directory).\nUse qt-cli for headless runs.\n";
+
+fn parse_cwd() -> Result<Option<PathBuf>> {
+    let mut args = std::env::args().skip(1);
+    let mut cwd = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Ok(None);
+            }
+            "--cwd" => {
+                cwd = Some(PathBuf::from(
+                    args.next().context("--cwd needs a directory")?,
+                ))
+            }
+            other if other.starts_with('-') => anyhow::bail!("unknown option {other}\n\n{USAGE}"),
+            other => cwd = Some(PathBuf::from(other)),
+        }
+    }
+    let cwd = match cwd {
+        Some(dir) => dir,
+        None => std::env::current_dir()?,
+    };
+    anyhow::ensure!(cwd.is_dir(), "{} is not a directory", cwd.display());
+    Ok(Some(cwd))
+}
+
+fn main() -> Result<()> {
+    let Some(cwd) = parse_cwd()? else {
+        return Ok(());
+    };
+    let engine = Engine::new(AgentHome::from_env(), cwd)?;
+    let theme_pref = engine.settings().theme();
+    let project = engine
+        .cwd()
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| engine.cwd().display().to_string());
+
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            workspace::bind_keys(cx);
+            match theme_pref.as_deref() {
+                Some("dark") => Theme::change(ThemeMode::Dark, None, cx),
+                Some("light") => Theme::change(ThemeMode::Light, None, cx),
+                _ => Theme::sync_system_appearance(None, cx),
+            }
+            let bounds = Bounds::centered(None, size(px(1240.), px(860.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some(format!("qt — {project}").into()),
+                    ..Default::default()
+                }),
+                window_min_size: Some(size(px(640.), px(480.))),
+                app_id: Some("qt".into()),
+                ..Default::default()
+            };
+            let engine = engine.clone();
+            if let Err(err) = gpui_kit::open_window(options, cx, move |window, cx| {
+                cx.new(|cx| Workspace::new(engine, window, cx))
+            }) {
+                eprintln!("qt: failed to open window: {err:#}");
+                cx.quit();
+            }
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            cx.activate(true);
+        });
+    Ok(())
+}

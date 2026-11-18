@@ -1,0 +1,14 @@
+[package]
+name = "qt-cli"
+description = "Headless print mode for the qt coding agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "qt-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+qt-core.workspace = true
+serde_json.workspace = true

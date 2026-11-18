@@ -1,43 +1,132 @@
-# Active implementation plan
+# qt (Rust + GPUI) Plan
 
-## Workstream index
+The C++17 TUI implementation was archived to `archived/` on 2026-11-18 and qt is being
+rebuilt as a Rust workspace with a GPUI desktop UI. Items are checked only when the code
+and edge cases are complete and covered by tests or a recorded manual check.
 
-Use [TODO.md](TODO.md) for current tracking and verification entry points.
-Memory contracts and remaining work are tracked in:
+The parity checklist below comes from a full inventory of the archived code (2026-11-18).
+Items marked *(unwired)* exist in the C++ code but were never enabled in the shipped
+binary. Items marked *(gap)* were promised by help text or docs but not implemented.
+TUI-only behaviour (terminal rendering, Kitty images, SIGWINCH, OSC progress, `/hotkeys`,
+`onTerminalInput`) is out of scope. Decisions (2026-11-18): parity targets the shipped binary plus Pi behaviours it left unwired (auto-retry, auto-compaction, overflow recovery, OAuth refresh). Dead code (`web_core` contracts, the index
+`run_service` MCP server, hidden `--inspect-*`/file-op developer flags) is not ported.
 
-- [MEM.md](MEM.md): governed memory and Dreaming.
-- [REVIEW.md](REVIEW.md): typed memory review workflows.
-- [mem_v2.md](mem_v2.md): retrieval V2 and its still-open acceptance gates.
-- [PERFORMANCE.md](PERFORMANCE.md): TUI performance status and verification.
+## Milestone 1: Foundation (done)
 
-Completed feature behavior belongs in
-[upstream compatibility](docs/upstream-compatibility.md); reproducible coverage
-belongs in the [test map](docs/reference-test-map.md). Avoid duplicating
-chronological tool logs or completed-task diaries here.
+- [x] Workspace layout: `qt-core` (no GPUI), `qt-app` (GPUI via `gpui-kit` 0.10), `qt-cli`.
+- [x] Agent home compatible with archived qt (`~/.qt`, `QT_CODING_AGENT_DIR`, settings/auth preserved, auth 0600).
+- [x] Providers: Anthropic Messages; OpenAI-compatible chat completions (OpenAI, OpenRouter, Ollama).
+- [x] Model discovery per provider.
+- [x] Tools read, bash, edit, write, grep, find, ls with Pi schemas and limits.
+- [x] Agent loop with cancellation; history sanitising.
+- [x] System prompt with AGENTS.md/CLAUDE.md discovery.
+- [x] Pi v3 sessions (linear replay, resume, listing).
+- [x] Desktop UI: sidebar, model/thinking pickers, streamed markdown, tool cards, diffs, keys dialog, themes.
+- [x] `qt-cli` print mode.
 
-## Public repository cleanup
+## Milestone 2: Harness and sessions
 
-- [x] Remove the legacy workstream directory and repair documentation links;
-  preserve its uncommitted contents in an external recovery archive.
-- [x] Remove superseded performance analysis, continuation handoff, and the
-  accidental empty control-character filename; preserve recoverable copies
-  outside the repository.
-- [x] Remove machine-specific home paths from first-party documentation and
-  source-provenance fixture metadata; ignore local credentials/runtime state.
-- [x] Condense redundant rollout notes while preserving open acceptance gates.
-- [x] Normalize generated dashboard package identities to omit developer paths.
-- [x] Rewrite the README around first-time setup, model selection, usage,
-  opt-in memory, development checks, and explicit release limitations.
-- [x] Check documentation references, artifact/privacy findings, native build,
-  framework smoke, and independent review.
+- [ ] Session entry types: model_change, thinking_level_change, session_info (name), label, branch_summary, compaction, custom_message, custom, bashExecution/custom message roles; v1/v2 → v3 migration; strict validation; stats (tokens, cost, per-model).
+- [ ] Tree: branch, branch_with_summary (model-backed), labels, get_tree, build context from any leaf; GUI tree view (`/tree`).
+- [ ] Fork (from a user message), clone, new, switch, import, missing-cwd prompt; `parentSession` header.
+- [ ] Session catalog: id-prefix resolution, `--session`, `--fork`, `--continue`, `--resume` (GUI picker), `--no-session`, `--session-dir` / `PI_CODING_AGENT_SESSION_DIR` / `sessionDir`.
+- [ ] Compaction: Pi summary prompts, cut point, split-turn prefix summary, iterative update, read/modified file tracking, `compaction` entry, replay injection; manual `/compact [instructions]`.
+- [ ] Auto-compaction on threshold *(unwired)* and overflow recovery (compact + retry once, Pi).
+- [ ] Context-overflow detection (phrase list + usage checks).
+- [ ] Auto-retry with exponential backoff for transient errors *(unwired)*; provider retry settings, Retry-After.
+- [ ] Steering / follow-up / next-turn queues with `steeringMode` / `followUpMode`; queue events; Enter-while-running steers.
+- [ ] Parallel tool execution for non-destructive batches *(unwired)*.
+- [ ] Hooks pipeline: before_agent_start, context, model-context augmentor, before_provider_request/payload, after_provider_response, tool_call (block), tool_result (rewrite), before_compact, session lifecycle events.
+- [ ] Save points / deferred runtime changes during a turn; active tool set persisted (`tools-config` entry).
+- [ ] Goals (`/goal`): objective, token/time accounting, continuation prompt.
 
-Verification: documentation links and fixture JSON passed; native and WASM
-Release builds passed; framework smoke passed (2/2); dashboard integration
-probe passed. Loader syntax, absolute-path rejection, normalization idempotence,
-ignore rules, and `git diff --check` passed. Scoped working-tree credential
-checks found no matches; this was not a full-history secret audit. Independent
-review checked the README commands and bundle build changes.
+## Milestone 3: Prompt resources
 
-This cleanup does not publish the repository, rewrite Git history, change
-licenses, or mark unfinished feature work complete. Before publication, review
-historical secrets and the licensing of first-party and incorporated code.
+- [ ] Skills: discovery roots, SKILL.md + root `*.md`, frontmatter, ignore files, collisions; `<available_skills>` prompt block; `/skill:<name>` (`enableSkillCommands`).
+- [ ] Prompt templates: roots, frontmatter, argument expansion (`$1`, `$@`, `$ARGUMENTS`, `${@:N:L}`, `{{args}}`), exposed as slash commands.
+- [ ] SYSTEM.md / APPEND_SYSTEM.md (project and agent home), `--system-prompt`, `--append-system-prompt`.
+- [ ] Runtime metadata section (shell, timezone, network, permissions), workspace-policy text.
+- [ ] Themes: JSON theme files (51 tokens), discovery roots, live reload; mapped onto the GPUI theme.
+
+## Milestone 4: Providers and models
+
+- [ ] OpenAI Responses API (reasoning replay, encrypted content, prompt cache key/retention, session headers).
+- [ ] openai-codex subscription (JWT account id, Codex endpoint and headers).
+- [ ] Azure OpenAI Responses.
+- [ ] Chat-completions compat matrix (store, developer role, max-tokens field, thinking formats, routing, provider hosts).
+- [ ] Anthropic extras: OAuth (Claude Pro/Max) headers and tool-name mapping, betas, adaptive thinking, 1h cache TTL.
+- Out of scope (decision 2026-11-18): Google/Vertex, Bedrock, Mistral and the Copilot device flow were serializer-only or unwired in the shipped binary.
+- [ ] Built-in model catalog (providers, ~77 models, context/max tokens/pricing/thinking maps); `models.json` overrides incl. `!command` keys; cost calculation incl. service tiers; thinking levels minimal/xhigh with clamping.
+- [ ] OpenRouter extras: pricing/metadata, disk cache, credits; image-generation models.
+- [ ] Auth: OAuth PKCE login with localhost callback (anthropic, openai-codex), token refresh *(gap in C++)*, `/login` `/logout` GUI, env-var table (~28 providers), legacy auth.json shapes, `--api-key`.
+- [ ] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
+- [ ] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`.
+- [ ] In-process llama.cpp via a `qt-llama-sys` crate building the PrismML fork submodule (needed for Q2_0): settings.llama (backend, context, generation, kvCache, grammar, embeddings, models), GPU offload planning, GGUF discovery and classification, `--discover-local-models`, tool-call parsing, embeddings, `/llama` panel.
+
+## Milestone 5: Tools
+
+- [ ] Workspace path policy: `workspaceRoot`, `allowExternalFilesystemAccess` (global only; project may narrow), applied to all path tools and bash cwd; prompt text.
+- [ ] Tool aliases and argument normalisation (`read_text`, `file_path`, `old_string`, …); `--tools` / `--no-tools` / `--no-builtin-tools`; `/tools` toggles; mutation approval queue.
+- [ ] Extras: read repeated-read guard and image resize; edit `replace_all` and NFKC fallback; grep `output_mode`, `head_limit`, `offset`, `multiline`, `type`, `hidden`, `no_ignore`; find `type`/`directories`; ls `recursive`/`depth`/`ignore`; bash `timeout_ms`, `workdir`, details fields, streaming.
+- [ ] New tools: append_text, apply_patch (Codex envelope), clipboard, complete_path, package_manager (plans only).
+- [ ] Web tools: web_fetch, web_search (DuckDuckGo), web_run (stateful batched browser); public-URL policy; `PI_OFFLINE` / `--offline`.
+- [ ] `!cmd` / `!!cmd` user bash with session entries.
+- [ ] `@file` arguments and mentions (inline `<file>`, images), path autocomplete.
+
+## Milestone 6: Project index
+
+- [ ] Background scanner (gitignore-aware, fingerprints, 30 s rescans), SQLite + FTS5 store under `agent_home/index/<hash>`.
+- [ ] Build metadata (CMake, Make, Ninja, qmake, waf, PlatformIO), compile_commands generation, include graph.
+- [ ] C/C++ code index (classes, methods, functions, call graph) and tree-sitter metadata.
+- [ ] Model tools: symbol, analyze_file, references, build_context, search_index, `index` router.
+- [ ] Router operation groups: core, code, fs, git, build. (Decision 2026-11-18: serial, debug, rtos, fetch and util groups are not ported.)
+- [ ] `/index` panel.
+
+## Milestone 7: Subagents and MCP
+
+- [ ] Agent definitions (frontmatter, built-in scout/planner/reviewer/worker, user/project scope, trust).
+- [ ] `subagent` tool: single, parallel, chain; child `qt-cli --mode json` processes; depth limits.
+- [ ] Persistent workers: spawn/send/follow_up/wait/interrupt/list, storage, mailbox, completion events, restart recovery, fork snapshots.
+- [ ] MCP client: config files and merge order, stdio / streamable-http / sse, sampling, proxy tools `mcp_<server>_<tool>`, resource tools, stderr log; `/mcp` panel.
+
+## Milestone 8: Modes and CLI
+
+- [ ] JSON event mode (`--mode json`), Pi event shapes, exit codes.
+- [ ] RPC mode (all commands and events, extension UI requests).
+- [ ] Full CLI flag set (model, thinking, tools, skills/templates/themes toggles, `--no-context-files`, `--list-models` table, `--export`, `--offline`, logging flags/env).
+- [ ] Subcommands: `install/remove/update/list` packages, `config`, `memory`.
+- [ ] Startup migrations (oauth.json, sessions dir, tools→bin, commands→prompts).
+- [ ] Logging (`--log-file`, `--log-stderr`, `--log-level`, `QT_LOG_*`).
+
+## Milestone 9: GUI equivalents of interactive features
+
+- [ ] Command palette / slash commands with autocomplete (all built-ins listed in the inventory).
+- [ ] `/settings` panel, `/session` and `/status` info, `/context` inspector, `/export` (HTML + JSONL), `/share` (gist), `/copy`, `/name`, `/changelog`, `/scoped-models` / `enabledModels`, model refresh.
+- [ ] Image paste and drop into the composer; prompt history (`history.jsonl`) with Up/Down; external editor.
+- [ ] HTML export renderer.
+
+## Milestone 10: Extensions
+
+- [ ] Discovery (`-e`, `.pi/extensions`, agent home, packages with filters), manifest v1, `package.json` `pi.extensions`.
+- [ ] Rhai script runtime (decision 2026-11-18, replaces AngelScript; `.rhai` files) with the same host API (`pi.*`, `ctx.*`), lifecycle events, commands, tools, flags, providers, resources, step budget and source limits.
+- [ ] Subprocess JSON-RPC transport.
+- [ ] `ctx.ui.*` dialogs and status/widgets/header/footer/working indicator mapped to GPUI; message renderers, shortcuts, autocomplete providers, custom components.
+- [ ] `/extensions`, `/skills`, `/prompts`, `/themes` package toggles; `/reload`.
+
+## Milestone 11: Governed memory
+
+- [ ] SQLite store with migrations v1–v7 and triggers; domain model, scopes, governance transitions, audit.
+- [ ] CRUD with secret redaction; capture/ingestion worker with spool and dedup; post-processing.
+- [ ] Recall: lexical (FTS5 + hashed similarity), graph, dense (embeddings, indexer jobs), code; RRF fusion; explanations.
+- [ ] Context rendering envelope and placement; pre-handler child protocol.
+- [ ] Review workflow (kinds, actions, batches, backup/restore, stats).
+- [ ] Dreaming, web research, auto_validate verifier.
+- [ ] Skill import, offline qtmem import, export/prune/scrub.
+- [ ] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions.
+- [ ] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).
+
+## Platform
+
+- [ ] CI on Linux, macOS, Windows (`.github/workflows/ci.yml`, not run yet).
+- [ ] Packaging (macOS `.app`, Windows MSI, Linux AppImage/Flatpak).
+- [ ] Manual GUI verification on macOS and Windows.

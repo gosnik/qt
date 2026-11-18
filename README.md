@@ -1,243 +1,91 @@
 # qt
 
-A native C++17 coding agent for the terminal, with local model inference,
-persistent sessions, repository tools, and opt-in governed memory.
+A desktop coding agent written in Rust with a [GPUI](https://www.gpui.rs) interface. It
+reads and edits files and runs commands in your project, streaming the model's answers
+and tool calls into a native window.
 
 qt follows the [Pi](https://github.com/earendil-works/pi-mono) coding-agent architecture
-while implementing its runtime natively. It is under active development, not a
-claim of complete upstream parity. See the [compatibility notes](docs/upstream-compatibility.md)
-for supported behavior and differences.
+(tools, prompts, session format). The previous C++17 terminal implementation is kept for
+reference under [`archived/`](archived/README.md).
 
-## What it does
+## Features
 
-- **Work in your repository:** chat in a terminal UI, inspect code, read and edit
-  files, run commands, and use the project index.
-- **Choose your inference backend:** use configured remote providers, Ollama,
-  or GGUF models through built-in llama.cpp.
-- **Keep work across sessions:** resume conversations, branch session history,
-  compact context, and export sessions.
-- **Extend the agent:** load skills, prompt templates, native AngelScript
-  extensions, MCP integrations, and isolated subagents.
-- **Review what it remembers:** enable scoped memory, inspect evidence and
-  review decisions, and open the browser memory dashboard.
+- **Native desktop UI** on Linux, macOS and Windows, built with GPUI and
+  [gpui-component](https://github.com/longbridge/gpui-kit): streamed markdown, collapsible
+  thinking, tool cards with live bash output and coloured edit diffs, light and dark themes.
+- **Providers:** Anthropic, OpenAI, OpenRouter, and any number of Ollama instances. Models are
+  discovered from each provider and chosen from a searchable picker.
+- **Pi tool set:** `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. It uses Pi's schemas,
+  2000-line / 50 KB output limits and `.gitignore`-aware search.
+- **Sessions** are saved as Pi v3 JSONL in `~/.qt/sessions`. You can resume them from the
+  sidebar, including sessions written by the archived C++ qt.
+- **Project instructions:** `AGENTS.md` / `CLAUDE.md` files from the project's ancestor
+  directories, plus `~/.qt/AGENTS.md`, are added to the system prompt.
+- **Headless mode:** `qt-cli` runs one prompt and streams the answer to stdout.
 
-## Build and launch
+## Build
 
-The current build and release workflows target Linux. Other platforms are not
-covered by those workflows. A normal build needs Git, Python 3, PlatformIO Core,
-CMake, a C/C++ compiler, and development libraries for SQLite, terminal info,
-libunistring, and zlib. Ninja is optional. Full dependency details and GPU
-requirements are in [docs/dependencies.md](docs/dependencies.md).
-
-On Debian/Ubuntu, a baseline toolchain can be installed with:
+You need a current stable Rust toolchain from [rustup](https://rustup.rs) (developed with 1.98). On Linux, GPUI also needs the
+development packages for its windowing and font stack:
 
 ```sh
-sudo apt-get update
-sudo apt-get install build-essential cmake ninja-build git pkg-config \
-  python3 python3-pip python3-venv libsqlite3-dev libtinfo-dev \
-  libunistring-dev zlib1g-dev
+sudo apt-get install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+  libwayland-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev libssl-dev
 ```
 
-If PlatformIO is not installed, create a local Python environment from the
-repository root:
+macOS needs the Xcode command-line tools. Windows needs the MSVC toolchain.
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install platformio
+cargo run --release -p qt-app            # desktop app for the current directory
+cargo run --release -p qt-app -- ~/code/myproject
+cargo run --release -p qt-cli -- "summarise this repository"
 ```
 
-From a checkout of this repository:
+The binaries are `target/release/qt` and `target/release/qt-cli`.
 
-```sh
-git submodule update --init --recursive
-pio run -e native
-.pio/build/native/qt
-```
+## First run
 
-The first build downloads pinned dependencies and builds the bundled llama.cpp
-runtime. The executable is `.pio/build/native/qt`.
+1. Open **API keys** in the sidebar and add a key for Anthropic, OpenAI or OpenRouter. Keys are
+   stored in `~/.qt/auth.json` with owner-only permissions. qt also reads
+   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY`. A local
+   [Ollama](https://ollama.com) server at `http://127.0.0.1:11434` is detected automatically.
+2. Pick a model in the header. The choice is saved as `defaultProvider` / `defaultModel`.
+3. Type a request:
+   - **Enter** sends.
+   - **Shift+Enter** inserts a newline.
+   - **Esc** stops the agent.
+   - **Ctrl/Cmd+N** starts a new session.
+   - **Ctrl/Cmd+B** toggles the sidebar.
 
-The default target detects supported local GPU toolchains. To build explicitly
-for CPU-only inference:
+qt can modify files and execute commands in the project directory. Use version control and
+review its changes.
 
-```sh
-QT_LLAMA_GPU_BACKENDS=cpu pio run -e native
-```
+## Configuration
 
-Ordinary native builds use the checked-in dashboard assets; they do **not**
-require Emscripten. `native_full` is the multi-GPU release target and requires
-additional SDKs—it is not the minimal getting-started build.
+The agent home is `~/.qt`. Set `QT_CODING_AGENT_DIR` to use a different directory.
+`settings.json` keys used by this version:
 
-### First session
-
-Launch qt from the repository you want to work on. Configure authentication
-with `/login` for a supported remote provider, or configure a local model as
-described below. Use `/model` to select a model, then enter your request.
-
-| Command | Purpose |
+| Key | Meaning |
 | --- | --- |
-| `/help` | Show available slash commands. |
-| `/model` | Choose a model. |
-| `/settings` | Open application settings. |
-| `/context` | Inspect the current prompt and context. |
-| `/session` | Inspect session information and usage. |
-| `/new` / `/resume` | Start fresh or resume another session. |
-| `/compact` | Compact the current session context. |
-| `/quit` | Exit qt. |
+| `defaultProvider`, `defaultModel` | Model selected at startup |
+| `maxOutputTokens` | Output budget per response (default 16384) |
+| `ollama.instances[]` | `{ "id", "baseUrl", "enabled", "models" }` Ollama servers |
+| `providers.<id>.baseUrl` | Override the endpoint for `anthropic`, `openai` or `openrouter` |
+| `gui.theme` | `"light"` or `"dark"`; unset follows the system |
 
-qt can modify files and execute commands. Use version control, inspect changes,
-and configure tools and permissions for the workspace you are working in.
+Other keys, for example those written by the archived C++ qt, are kept unchanged when
+qt rewrites the file.
 
-## Models and configuration
+## Layout
 
-The default agent home is `~/.qt`. Global settings live in
-`~/.qt/settings.json`; `QT_CODING_AGENT_DIR` selects a different agent home.
-Provider authentication and session state should stay outside version control.
-Inspect the effective configuration with:
-
-```sh
-.pio/build/native/qt --inspect-settings --json
+```text
+crates/qt-core   UI-agnostic runtime: config, providers, tools, agent loop, sessions
+crates/qt-app    GPUI desktop application (binary: qt)
+crates/qt-cli    headless print mode (binary: qt-cli)
+archived/        previous C++17 TUI implementation (reference only)
+reference/       Pi source used as the behavioural reference (not tracked)
 ```
 
-### Local GGUF models
-
-No model weights are bundled with qt.
-
-Merge the following into your global settings, replacing the model path with
-an existing GGUF file. Do not overwrite unrelated settings:
-
-```json
-{
-  "llama": {
-    "models": [
-      {
-        "id": "local-model",
-        "name": "My local model",
-        "path": "~/models/model.gguf"
-      }
-    ]
-  }
-}
-```
-
-Then select it with `/model`, or launch it directly:
-
-```sh
-.pio/build/native/qt --provider llama --model local-model
-```
-
-`/llama` exposes local-model status and configuration. Models run in-process;
-no separate llama.cpp server is required. GPU offload depends on the compiled
-backends, available hardware, and model configuration. See the
-[runtime troubleshooting guide](docs/dependencies.md#llama-runtime-troubleshooting)
-for memory, grammar, embedding, and backend issues. `/ollama` manages separately
-running Ollama instances and their models.
-
-### Non-interactive use
-
-With a provider and model configured:
-
-```sh
-# Process one request and exit.
-.pio/build/native/qt --print "Explain the architecture of this repository"
-
-# Emit JSON-mode output for automation.
-.pio/build/native/qt --mode json --print "Summarize the current changes"
-
-# Start the RPC interface.
-.pio/build/native/qt --mode rpc
-
-# Show the complete command-line reference.
-.pio/build/native/qt --help
-```
-
-## Memory, review, and Dreaming
-
-Built-in memory is disabled by default. Enable it deliberately through
-`/memory settings`; enabling memory also makes its configured automatic recall
-and capture behavior relevant. Some settings take effect on the next runtime.
-
-| Command | Purpose |
-| --- | --- |
-| `/memory settings` | Configure memory, recall, capture, and Dreaming. |
-| `/memory status` | Inspect runtime state and statistics. |
-| `/memory review` | Open the governed review workflow. |
-| `/memory dashboard` | Open the browser memory dashboard. |
-
-Dreaming is a separate opt-in background exploration workflow. It produces
-reviewable artifacts rather than silently treating generated ideas as facts.
-Web research is disabled by default and has its own policy setting.
-
-The default promotion policy is `review_only`. The optional `auto_validate`
-policy runs a separate, local llama.cpp verifier over fetched research
-evidence. Only a supported research successor can become validated; the
-original Dream is preserved. Missing evidence, unavailable models, or failed
-verification leave the successor pending. This is automated evidence checking,
-not a guarantee of factual accuracy.
-
-Pre-handler, Dreaming, and verifier models have searchable selection lists in
-`/memory settings`. The verifier picker is restricted to local llama.cpp models.
-Graph, dense, and code retrieval remain opt-in; their outstanding acceptance
-gates are documented in the [Memory V2 rollout guide](docs/memory-v2-rollout.md).
-
-## Development and verification
-
-```sh
-# Build the application.
-pio run -e native
-
-# Run the native AngelScript test suite.
-pio test -e native
-
-# Run only the framework smoke checks.
-QT_AS_TEST_FILTER=framework_smoke pio test -e native
-
-# Restore the production executable after tests.
-pio run -e native
-```
-
-Tests live under `test/`; focused integration probes live under `scripts/`.
-The terminal probes require libvterm development headers and pkg-config; the
-full TUI suite also uses tmux. Consult the
-[test map](docs/reference-test-map.md) for prerequisites and focused commands.
-Framework smoke tests alone are not full feature coverage.
-
-To rebuild the browser dashboard, install Emscripten and CMake 3.24 or newer:
-
-```sh
-QT_MEMORY_DASHBOARD_BUILD=1 pio run -e native
-```
-
-Keep the generated `dashboard_wasm/web/dist/` assets with changes to the
-dashboard source. They are embedded application inputs, not disposable cache
-files. The `reference/` checkouts are optional local development references and
-are not shipped with this repository.
-
-Runtime logging is opt-in. For interactive debugging, use a file so logs do
-not interfere with the terminal or structured output:
-
-```sh
-.pio/build/native/qt --log-file qt-debug.log --log-level debug
-```
-
-Logs, session exports, and memory databases can contain workspace or prompt
-content. Review them before sharing and keep them out of commits.
-
-## Documentation
-
-- [Dependencies and backend setup](docs/dependencies.md)
-- [Native extensions](docs/native-extensions.md)
-- [Persistent subagents](docs/persistent-subagents.md)
-- [Memory source provenance](docs/memory-source-provenance.md)
-- [Compatibility and known differences](docs/upstream-compatibility.md)
-- [Tests and verification](docs/reference-test-map.md)
-- [Current work and remaining gaps](TODO.md)
-- [Contributor/agent instructions](AGENTS.md)
-
-## Licensing
-
-The repository does not yet include a top-level license for qt. Third-party code and
-assets retain their own notices; see [dependencies](docs/dependencies.md) and
-[source provenance](docs/memory-source-provenance.md). Resolve the project
-license and review bundled notices before publishing a release.
+See [PLAN.md](PLAN.md) for status and remaining work, and
+[docs/upstream-compatibility.md](docs/upstream-compatibility.md) for differences from Pi and
+the archived qt.
