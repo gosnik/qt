@@ -655,7 +655,10 @@ impl Hooks {
     }
 
     pub fn run_after_provider_response(&self, event: &ProviderResponseEvent) {
-        for hook in snapshot(&self.read().after_provider_response) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().after_provider_response);
+        for hook in hooks {
             hook(event);
         }
     }
@@ -676,7 +679,10 @@ impl Hooks {
     /// and the first block stops the chain.
     pub fn run_tool_call_chain(&self, event: &ToolCallEvent) -> ToolCallOutcome {
         let mut event = event.clone();
-        for hook in snapshot(&self.read().tool_call) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().tool_call);
+        for hook in hooks {
             if let Some(decision) = hook(&event) {
                 if decision.block {
                     return ToolCallOutcome::Blocked(decision.reason);
@@ -690,7 +696,10 @@ impl Hooks {
     }
 
     pub fn run_tool_result(&self, mut event: ToolResultEvent) -> ToolOutput {
-        for hook in snapshot(&self.read().tool_result) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().tool_result);
+        for hook in hooks {
             if let Some(patch) = hook(&event) {
                 if let Some(content) = patch.content {
                     event.output.content = content;
@@ -707,14 +716,18 @@ impl Hooks {
     }
 
     pub fn run_before_compact(&self, event: &BeforeCompactEvent) -> BeforeCompactResult {
-        snapshot(&self.read().before_compact)
+        let hooks = snapshot(&self.read().before_compact);
+        hooks
             .into_iter()
             .find_map(|hook| hook(event).filter(|r| r.cancel || r.compaction.is_some()))
             .unwrap_or_default()
     }
 
     pub fn emit_session(&self, event: &SessionEvent) {
-        for hook in snapshot(&self.read().session) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().session);
+        for hook in hooks {
             hook(event);
         }
     }
@@ -731,7 +744,10 @@ impl Hooks {
             images,
             source,
         };
-        for hook in snapshot(&self.read().input) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().input);
+        for hook in hooks {
             match hook(&event)? {
                 None => {}
                 Some(InputOutcome::Handled) => return Ok(InputOutcome::Handled),
@@ -749,15 +765,17 @@ impl Hooks {
 
     /// `true` when a hook cancelled the switch.
     pub fn run_session_before_switch(&self, event: &SessionBeforeSwitchEvent) -> bool {
-        snapshot(&self.read().before_switch)
-            .into_iter()
-            .any(|hook| hook(event))
+        let hooks = snapshot(&self.read().before_switch);
+        hooks.into_iter().any(|hook| hook(event))
     }
 
     /// The first cancelling result, else the merged skip flag.
     pub fn run_session_before_fork(&self, event: &SessionBeforeForkEvent) -> BeforeForkResult {
         let mut out = BeforeForkResult::default();
-        for hook in snapshot(&self.read().before_fork) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().before_fork);
+        for hook in hooks {
             if let Some(result) = hook(event) {
                 out.skip_conversation_restore |= result.skip_conversation_restore;
                 if result.cancel {
@@ -772,7 +790,10 @@ impl Hooks {
     /// Later hooks override earlier fields; a cancel stops the chain.
     pub fn run_session_before_tree(&self, event: &SessionBeforeTreeEvent) -> BeforeTreeResult {
         let mut out = BeforeTreeResult::default();
-        for hook in snapshot(&self.read().before_tree) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().before_tree);
+        for hook in hooks {
             if let Some(result) = hook(event) {
                 if result.summary.is_some() {
                     out.summary = result.summary;
@@ -796,19 +817,28 @@ impl Hooks {
     }
 
     pub fn emit_model_select(&self, event: &ModelSelectEvent) {
-        for hook in snapshot(&self.read().model_select) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().model_select);
+        for hook in hooks {
             hook(event);
         }
     }
 
     pub fn emit_thinking_level_select(&self, event: &ThinkingLevelSelectEvent) {
-        for hook in snapshot(&self.read().thinking_select) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().thinking_select);
+        for hook in hooks {
             hook(event);
         }
     }
 
     pub fn emit_user_bash(&self, event: &UserBashEvent) {
-        for hook in snapshot(&self.read().user_bash) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().user_bash);
+        for hook in hooks {
             hook(event);
         }
     }
@@ -819,7 +849,10 @@ impl Hooks {
         event: &ResourcesDiscoverEvent,
     ) -> DiscoveredResourcePaths {
         let mut out = DiscoveredResourcePaths::default();
-        for hook in snapshot(&self.read().resources_discover) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().resources_discover);
+        for hook in hooks {
             if let Some(paths) = hook(event) {
                 out.skill_paths.extend(paths.skill_paths);
                 out.prompt_paths.extend(paths.prompt_paths);
@@ -830,7 +863,10 @@ impl Hooks {
     }
 
     pub fn emit_instructions_loaded(&self, event: &InstructionsLoadedEvent) {
-        for hook in snapshot(&self.read().instructions_loaded) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().instructions_loaded);
+        for hook in hooks {
             hook(event);
         }
     }
@@ -855,7 +891,10 @@ impl Hooks {
     }
 
     pub fn emit_conversation_created(&self, conversation: &crate::engine::Conversation) {
-        for hook in snapshot(&self.read().conversation) {
+        // Snapshot first: the read guard must not live across the calls
+        // (a hook may register or remove hooks).
+        let hooks = snapshot(&self.read().conversation);
+        for hook in hooks {
             hook(conversation);
         }
     }
@@ -885,6 +924,33 @@ pub fn agent_message_role(message: &AgentMessage) -> &'static str {
 mod tests {
     use super::*;
     use crate::message::UserContent;
+
+    #[test]
+    fn hooks_may_register_hooks_while_events_are_emitted() {
+        // A listener that attaches more hooks (as the runtime's memory attach
+        // does from `conversation created`) must not deadlock on the table.
+        let hooks = Hooks::new();
+        let inner = hooks.clone();
+        hooks.add_session_listener(Arc::new(move |_: &SessionEvent| {
+            inner.add_agent_event_listener(Arc::new(|_: &AgentEvent| {}));
+        }));
+        let switching = hooks.clone();
+        hooks.add_session_before_switch(Arc::new(move |_: &SessionBeforeSwitchEvent| {
+            switching.add_agent_event_listener(Arc::new(|_: &AgentEvent| {}));
+            false
+        }));
+        hooks.emit_session(&SessionEvent::Shutdown {
+            session_id: "s".into(),
+            session_file: None,
+            reason: "quit".into(),
+            target_session_file: None,
+        });
+        assert!(!hooks.run_session_before_switch(&SessionBeforeSwitchEvent {
+            reason: "new".into(),
+            target_session_file: None,
+        }));
+        assert_eq!(hooks.read().agent_event.len(), 2);
+    }
 
     #[test]
     fn chains_and_blocks_in_registration_order() {

@@ -199,6 +199,16 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Inputs of the memory views: the runtime, transcript cards and the
+    /// discovered models (settings model pickers).
+    pub(super) fn memory_host(&self, cx: &mut Context<Self>) -> crate::memory::MemoryHost {
+        let this = cx.entity().downgrade();
+        let card: crate::memory::CardSink = Rc::new(move |title, lines, error, cx| {
+            let _ = this.update(cx, |this, cx| this.card(title, lines, error, cx));
+        });
+        crate::memory::MemoryHost::new(card, self.model_list(), cx)
+    }
+
     fn handle_action(
         &mut self,
         line: &str,
@@ -254,12 +264,15 @@ impl Workspace {
             }
             SlashAction::SelectTools { filter, .. } => self.open_tools_panel(filter, window, cx),
             SlashAction::ImportMissingCwd { path, .. } => self.import(path, window, cx),
-            SlashAction::Subsystem { command, .. } => match command.as_str() {
+            SlashAction::Subsystem { command, arguments } => match command.as_str() {
                 "ollama" => self.open_ollama(&super::OpenOllama, window, cx),
+                "memory" => {
+                    let host = self.memory_host(cx);
+                    crate::memory::run_slash(host, line.to_string(), arguments, window, cx)
+                }
                 other => {
                     let what = match other {
                         "llama" => "The llama.cpp panel (/llama)",
-                        "memory" => "The memory panel (/memory)",
                         "index" => "The project index panel (/index)",
                         "mcp" => "The MCP panel (/mcp)",
                         "subagent" => "The subagent panel (/subagent)",

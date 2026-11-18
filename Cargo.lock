@@ -4966,6 +4966,7 @@ dependencies = [
  "ignore",
  "image",
  "qt-core",
+ "qt-memory",
  "qt-runtime",
  "reqwest",
  "serde_json",
