@@ -341,9 +341,10 @@ fn dashboard_operations() {
         &dashboard::memories(&runtime, &MemoryFilter::default()).unwrap(),
         false,
     );
-    // The session memories plus the durable one (no session: "unknown").
+    // The working-tree scope has no session dimension, so every memory
+    // groups under "unknown".
     let ids: Vec<&str> = sessions.iter().map(|row| row.id.as_str()).collect();
-    assert_eq!(ids, ["s1", "unknown"]);
+    assert_eq!(ids, ["unknown"]);
     assert!(!dashboard::audit_lines(&runtime, 20).unwrap().is_empty());
     assert!(dashboard::system_lines(&runtime)[1].starts_with("Schema version: "));
     assert!(dashboard::retrieval_lines(&runtime)[0].starts_with("Retrieval: "));

@@ -88,7 +88,7 @@ pub use recall::{RecallRequest, RecallService, RecalledMemory};
 pub use runtime::{CompletedEpisodeMetadata, MemoryRuntime, MemoryRuntimeOptions};
 pub use scope::{
     allowed_keys, derive_runtime_memory_scope, durable_memory_scope, recall_scopes,
-    scope_can_access, scope_key, scope_score, validate_scope,
+    scope_can_access, scope_key, scope_score, validate_scope, workspace_memory_scope,
 };
 pub use service::{
     GovernanceService, LifecyclePolicy, LifecycleRequest, MemoryService, prepare_remember,

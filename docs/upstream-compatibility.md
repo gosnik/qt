@@ -438,6 +438,29 @@ Pi has no persistent-memory contract; the archived qt is the reference.
     looked only in the exact scope, so captured, Dreaming and consolidation reviews that
     `review list` showed could not be opened or decided. `review history` without an id
     merges both scopes, newest first.
+  - **One exact scope per working tree.** Every front end (desktop app, `qt-cli`
+    print/json/rpc, `qt memory`) uses `workspace_memory_scope(cwd)`: the archived
+    `derive_runtime_memory_scope` (user `local_user`, project = repository-root basename,
+    repository hash of the primary remote or root path, branch) over the canonical cwd,
+    with empty session and agent. The archived TUI and RPC runtimes called
+    `set_session_context(session_id, session_id)`, putting the session into the exact
+    scope, while `qt memory` derived it without one; a memory remembered over RPC, by the
+    agent tool in a print run or from `/memory` was therefore invisible to every other
+    session, to `qt memory` and to the app's `/memory status`, dashboard and review inbox
+    (and `--no-session` runs stranded it for good). `set_session_context` now only records
+    the session (reported as `scope.session` by RPC `memory status`); captured evidence
+    still carries it in its `qt-session://` source URIs. Consequence: exact-scope memories
+    are shared by all sessions of a working tree rather than isolated per session, and the
+    dashboard's group-by-session view puts new memories under "unknown".
+  - Fix-up for existing stores: when a runtime or `qt memory` opens the store, exact-scope
+    memories of the same user/project/repository/branch whose `session == agent`
+    (non-empty, no task or conversation; the pattern the runtimes wrote) are moved into
+    the working-tree scope together with their revisions, edges, procedure runs, sources,
+    review items/actions, audit and session events, context blocks and capture receipts
+    (rows that would collide with an existing row keep their old key). The update trigger
+    re-queues retrieval indexing. Other working trees and worker-style scopes
+    (`agent != session`) are left alone; scope JSON inside stored revision/review payloads
+    keeps the old session.
 - **Wiring:** recall, capture, the memory tools, Dreaming and the `qt-cli memory` command are
   wired by `qt-runtime` (see the composition-root section). The GUI `/memory` panel, Review
   Inbox, settings editor and native dashboard are described in "Governed memory in the

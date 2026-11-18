@@ -180,7 +180,7 @@ fn status(context: &RpcMemoryContext) -> RpcResult {
     });
     result["scope"] = json!({
         "user": scope.user, "project": scope.project, "repository": scope.repository,
-        "repository_display": scope.repository_display, "branch": scope.branch, "session": scope.session,
+        "repository_display": scope.repository_display, "branch": scope.branch, "session": memory.session_context().0,
     });
     let dreaming = memory.dreaming_status();
     result["dreaming"]["runtime"] = json!({

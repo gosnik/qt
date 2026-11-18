@@ -24,7 +24,7 @@ use crate::review::{
     review_statistics_json,
 };
 use crate::runtime::{MemoryRuntime, MemoryRuntimeOptions};
-use crate::scope::{derive_runtime_memory_scope, durable_memory_scope, scope_key};
+use crate::scope::{durable_memory_scope, scope_key, workspace_memory_scope};
 use crate::service::MemoryService;
 use crate::settings::MemorySettings;
 use crate::store::{MemoryStore, SCHEMA_VERSION};
@@ -604,7 +604,7 @@ fn review_cards(reviews: &[ReviewItem], json: bool) -> String {
 /// The scope a command runs in: the derived runtime scope, or the global
 /// user scope with `--global`.
 pub fn command_scope(cwd: &Path, global_user: bool) -> MemoryScope {
-    let scope = derive_runtime_memory_scope(cwd, "", "");
+    let scope = workspace_memory_scope(cwd);
     if !global_user {
         return scope;
     }
@@ -765,6 +765,9 @@ fn execute(
         },
     );
     let scope = command_scope(&environment.cwd, parsed.global_user);
+    // Same fail-open fix-up the runtimes run on open (per-session exact
+    // scopes of this working tree written by earlier builds).
+    let _ = store.adopt_session_scopes(&workspace_memory_scope(&environment.cwd));
     let operation = parsed.operation.as_str();
     match operation {
         "status" | "health" => {
