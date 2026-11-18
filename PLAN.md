@@ -136,13 +136,13 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 ## Milestone 11: Governed memory
 
 - [x] SQLite store with migrations v1–v7 and triggers; domain model, scopes, governance transitions, audit.
-- [ ] CRUD with secret redaction; capture/ingestion worker with spool and dedup; post-processing.
-- [ ] Recall: lexical (FTS5 + hashed similarity), graph, dense (embeddings, indexer jobs), code; RRF fusion; explanations (Code recall verified end to end 2026-11-18: persisted index snapshot, pinned FTS lexical provider, `code_bm25`/`code_graph` in CLI/RPC explain, dashboard and injected context.)
-- [ ] Context rendering envelope and placement; pre-handler child protocol.
+- [x] CRUD with secret redaction; capture/ingestion worker with spool and dedup; post-processing. (Verified end to end 2026-11-18.)
+- [x] Recall: lexical (FTS5 + hashed similarity), graph, dense (embeddings, indexer jobs), code; RRF fusion; explanations (Code recall verified end to end 2026-11-18: persisted index snapshot, pinned FTS lexical provider, `code_bm25`/`code_graph` in CLI/RPC explain, dashboard and injected context.)
+- [x] Context rendering envelope and placement; pre-handler child protocol. (Verified end to end 2026-11-18.)
 - [x] Review workflow (kinds, actions, batches, backup/restore, stats).
 - [ ] Dreaming, web research, auto_validate verifier. (Full cycle verified with real Dream and verifier children on a local llama model and a stubbed research child; gap: the real research child has not been run against public web search/fetch.)
 - [x] Skill import, offline qtmem import, export/prune/scrub.
-- [ ] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions.
+- [x] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions. (Verified end to end 2026-11-18.)
 - [x] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).
 - [x] One memory scope per working tree across front ends: app, `qt-cli` print/json/rpc and `qt memory` all use `workspace_memory_scope(cwd)` (session-free exact scope), so RPC/print/tool memories count in every session's `/memory status`, inbox, dashboard and the CLI; stores with per-session exact scopes of the same tree are folded in on open. Acceptance: `qt-cli/tests/memory_scope.rs` (RPC remember → second RPC session and `qt memory status/recall` from root and subdirectory), `qt-memory/tests/runtime.rs` adoption test. Gap: not re-checked in the GUI on Xvfb (the app uses the same `qt-runtime` path as RPC).
 
