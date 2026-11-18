@@ -495,6 +495,149 @@ fn extension_tool_and_flag_are_used_in_a_run() {
     );
 }
 
+const INPUT_EXTENSION: &str = r#"
+fn activate() {
+    on("input", "on_input");
+    registerCommand("ping", "Ping", "Answer pong");
+}
+
+fn on_input(event) {
+    if event.text == "skip me" {
+        return #{ action: "handled" };
+    }
+    if event.text.starts_with("rewrite:") {
+        return #{ action: "transform", text: "rewritten from " + event.source };
+    }
+    #{ action: "continue" }
+}
+
+fn command_ping(args) { #{ text: "pong " + args.args } }
+"#;
+
+/// The user texts the model saw, one per request.
+fn last_user_texts(server: &MockServer) -> Vec<String> {
+    server
+        .requests()
+        .iter()
+        .filter_map(|r| {
+            r["messages"]
+                .as_array()?
+                .iter()
+                .rev()
+                .find(|m| m["role"] == "user")
+                .map(|m| match &m["content"] {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+        })
+        .collect()
+}
+
+#[test]
+fn print_mode_runs_extension_commands_input_hooks_and_templates() {
+    let server = MockServer::start(Arc::new(|_: &Value| text_reply("ok")));
+    let env = env(server.port, json!({}));
+    std::fs::write(env.work.join("hooks.rhai"), INPUT_EXTENSION).unwrap();
+    let prompts = env.work.join(".pi/prompts");
+    std::fs::create_dir_all(&prompts).unwrap();
+    std::fs::write(
+        prompts.join("hi.md"),
+        "---\ndescription: hi\n---\nSay hello to $1",
+    )
+    .unwrap();
+    let output = run(
+        &env,
+        &[
+            "--no-session",
+            "-e",
+            "hooks.rhai",
+            "-p",
+            "/ping there",
+            "skip me",
+            "rewrite: this",
+            "/hi Ada",
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("pong there"),
+        "{}",
+        stderr(&output)
+    );
+    // The command and the handled input never reach the model; the
+    // transformed input and the expanded template do (Pi `prompt`).
+    assert_eq!(
+        last_user_texts(&server),
+        ["rewritten from interactive", "Say hello to Ada"]
+    );
+}
+
+#[test]
+fn astra_auto_compact_example_compacts_before_the_next_input() {
+    let usage = |tokens: u64| {
+        Arc::new(move |request: &Value| {
+            let text = if request["tools"].is_array() {
+                "answer"
+            } else {
+                "summary of the work"
+            };
+            sse(&[
+                json!({"choices":[{"delta":{"content":text}}]}),
+                json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":tokens,"completion_tokens":3,"total_tokens":tokens + 3}}),
+            ])
+        }) as Responder
+    };
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/astra-auto-compact.rhai")
+        .canonicalize()
+        .unwrap();
+    for (model, tokens, compacts) in [
+        ("Astra-1", 250_000, true),
+        ("Astra-1", 150_000, false),
+        ("other", 250_000, false),
+    ] {
+        let server = MockServer::start(usage(tokens));
+        let env = env(
+            server.port,
+            json!({
+                "ollama": {"instances": [{"id": "mock", "baseUrl": format!("http://127.0.0.1:{}", server.port), "models": [{"name": model, "contextWindow": 1_000_000}]}]},
+                "defaultModel": model,
+            }),
+        );
+        let sessions = env.work.join("sessions");
+        let output = run(
+            &env,
+            &[
+                "--session-dir",
+                sessions.to_str().unwrap(),
+                "-e",
+                example.to_str().unwrap(),
+                "-p",
+                "first",
+                "second",
+            ],
+            None,
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+        let session = std::fs::read_dir(&sessions)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "jsonl"))
+            .expect("session file");
+        let kinds: Vec<String> = std::fs::read_to_string(session)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap()["type"].to_string())
+            .collect();
+        assert_eq!(
+            kinds.iter().any(|k| k == "\"compaction\""),
+            compacts,
+            "{model} at {tokens}: {kinds:?}"
+        );
+    }
+}
+
 fn mcp_mock_server() -> Option<PathBuf> {
     let exe = qt_cli();
     let dir = exe.parent()?;

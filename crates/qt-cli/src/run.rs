@@ -13,6 +13,7 @@ use qt_core::agent::AgentEvent;
 use qt_core::config::AgentHome;
 use qt_core::engine::{Conversation, Delivery};
 use qt_core::events_json::{PiEventSerializer, session_header_json};
+use qt_core::harness::hooks::{InputOutcome, InputSource};
 use qt_core::input::DiagnosticSeverity;
 use qt_core::message::{ContentBlock, Message, StopReason};
 use qt_runtime::{AttachOptions, RunMode, Runtime, RuntimeOptions};
@@ -354,17 +355,35 @@ fn run_with(runtime: &Runtime, parsed: CliArgs, mode: StartupMode, stdin_is_tty:
         .filter(|first| !first.is_empty() || stdin.is_some() || !parsed.file_args.is_empty());
     let mut deferred = String::new();
     loop {
-        let started = if let Some(first) = initial.take() {
-            conversation.prompt_with_files(&first, &parsed.file_args, stdin.as_deref())
+        let (text, images, diagnostics) = if let Some(first) = initial.take() {
+            let files = qt_core::input::process_file_arguments(
+                &parsed.file_args,
+                engine.cwd(),
+                engine.settings().image_auto_resize(),
+            );
+            if let Some(error) = files
+                .diagnostics
+                .iter()
+                .find(|d| d.severity == DiagnosticSeverity::Error)
+            {
+                eprintln!("qt: {}", error.message);
+                return 1;
+            }
+            let message =
+                qt_core::input::build_initial_message(stdin.as_deref(), &files.text, Some(&first));
+            (message, files.images, files.diagnostics)
         } else if let Some(text) = remaining.pop_front() {
-            conversation
-                .prompt(&text, Vec::new())
-                .map(|rx| (rx, Vec::new()))
+            (text, Vec::new(), Vec::new())
         } else {
             break;
         };
-        let (rx, diagnostics) = match started {
-            Ok(v) => v,
+        let rx = match submit(runtime, &conversation, &text, images) {
+            Ok(Some(rx)) => rx,
+            // An extension command or `input` hook handled the message.
+            Ok(None) => {
+                drain_sink(runtime, &conversation, &sink_rx, json);
+                continue;
+            }
             Err(e) => {
                 eprintln!("qt: {e:#}");
                 return 1;
@@ -438,6 +457,37 @@ fn run_with(runtime: &Runtime, parsed: CliArgs, mode: StartupMode, stdin_is_tty:
         println!("{deferred}");
     }
     0
+}
+
+/// Submit a message the way Pi's `AgentSession.prompt` does: an extension
+/// command runs instead (its output and errors go to stderr), then the
+/// extension `input` hooks (source `interactive`) and the template / skill
+/// expansion apply before the prompt starts. `Ok(None)` when nothing runs.
+fn submit(
+    runtime: &Runtime,
+    conversation: &Conversation,
+    text: &str,
+    images: Vec<ContentBlock>,
+) -> anyhow::Result<Option<Receiver<AgentEvent>>> {
+    let engine = conversation.engine();
+    if let Some(command) = crate::prompting::extension_command(engine, text) {
+        match runtime.run_extension_command(&command.target, &command.arguments) {
+            Ok(lines) => {
+                for line in crate::prompting::command_output(&command.target, lines) {
+                    eprintln!("{line}");
+                }
+            }
+            Err(error) => eprintln!("Extension error (command:{}): {error:#}", command.name),
+        }
+        return Ok(None);
+    }
+    match engine.process_input(text, images, InputSource::Interactive)? {
+        InputOutcome::Handled => Ok(None),
+        InputOutcome::Continue { text, images } => {
+            let text = crate::prompting::expand(engine, &text);
+            conversation.prompt(&text, images).map(Some)
+        }
+    }
 }
 
 /// Runs started by extensions while a prompt ran.

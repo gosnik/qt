@@ -18,7 +18,7 @@ use qt_core::harness::hooks::{InputOutcome, InputSource};
 use qt_core::message::ContentBlock;
 use qt_core::model_scope::ScopedModel;
 use qt_core::provider::{ModelRef, ThinkingLevel};
-use qt_core::slash::{SlashCommandSource, parse_invocation};
+use qt_core::slash::SlashCommandSource;
 use qt_core::tools::Tool as _;
 use qt_core::{QueueMode, SessionStats};
 use qt_extensions::ExtensionUi as _;
@@ -445,47 +445,13 @@ impl RpcSession {
     /// `(invocation name, registered name, arguments)` when `text` invokes
     /// an extension command.
     fn extension_command(&self, text: &str) -> Option<(String, String, String)> {
-        if !text.starts_with('/') {
-            return None;
-        }
-        let invocation = parse_invocation(text).ok()?;
-        let registry = self.engine().slash_commands();
-        let command = registry.find(&invocation.name)?;
-        (command.source == SlashCommandSource::Extension).then(|| {
-            (
-                command.name.clone(),
-                command
-                    .target_name
-                    .clone()
-                    .unwrap_or_else(|| command.name.clone()),
-                invocation.arguments,
-            )
-        })
+        crate::prompting::extension_command(self.engine(), text)
+            .map(|c| (c.name, c.target, c.arguments))
     }
 
-    /// Expand `/template args` and `/skill:name args` (Pi
-    /// `_expandSkillCommand` + `expandPromptTemplate`); other text is kept.
+    /// Expand `/template args` and `/skill:name args`; other text is kept.
     fn expand(&self, text: &str) -> String {
-        if !text.starts_with('/') {
-            return text.to_string();
-        }
-        let Ok(invocation) = parse_invocation(text) else {
-            return text.to_string();
-        };
-        let registry = self.engine().slash_commands();
-        match registry.find(&invocation.name) {
-            Some(command)
-                if matches!(
-                    command.source,
-                    SlashCommandSource::Prompt | SlashCommandSource::Skill
-                ) =>
-            {
-                registry
-                    .expand(command, &invocation.arguments)
-                    .unwrap_or_else(|| text.to_string())
-            }
-            _ => text.to_string(),
-        }
+        crate::prompting::expand(self.engine(), text)
     }
 
     /// Run an extension command (Pi `_tryExecuteExtensionCommand`): output
@@ -493,9 +459,8 @@ impl RpcSession {
     fn run_extension_command(&self, name: &str, target: &str, arguments: &str) {
         match self.runtime.run_extension_command(target, arguments) {
             Ok(lines) => {
-                let placeholder = format!("Extension command /{target} completed.");
-                for line in lines.iter().filter(|l| **l != placeholder) {
-                    self.ui.notify(line, NotifyKind::Info);
+                for line in crate::prompting::command_output(target, lines) {
+                    self.ui.notify(&line, NotifyKind::Info);
                 }
             }
             Err(error) => self.events.emit_value(&json!({

@@ -782,6 +782,7 @@ mod tests {
             timestamp: String::new(),
             cwd: "/work".into(),
             parent_session: None,
+            extra: Default::default(),
         };
         let assistant = AssistantMessage {
             content: vec![
