@@ -72,6 +72,7 @@ struct Inner {
     mcp_connected: AtomicBool,
     memory: Option<Arc<MemorySubsystem>>,
     memory_settings: MemorySettings,
+    memory_error: Option<String>,
     extensions: Extensions,
     subagents: SubagentSubsystem,
     diagnostics: Mutex<Vec<String>>,
@@ -225,6 +226,7 @@ impl Runtime {
                 MemorySettings::default()
             }
         };
+        let mut memory_error = None;
         let memory = if memory_settings.enabled && !options.no_memory && child_task.is_none() {
             let llama_settings = llama.effective_settings(&effective);
             let plan = resolve_memory_task_models(&llama_settings, &cwd, home.root());
@@ -255,6 +257,7 @@ impl Runtime {
                     diagnostics.push(format!(
                         "built-in memory disabled after initialization error: {e}"
                     ));
+                    memory_error = Some(e.to_string());
                     None
                 }
             }
@@ -441,6 +444,7 @@ impl Runtime {
                 mcp_connected: AtomicBool::new(false),
                 memory,
                 memory_settings,
+                memory_error,
                 extensions,
                 subagents,
                 diagnostics: Mutex::new(diagnostics),
@@ -522,6 +526,22 @@ impl Runtime {
     /// The resolved `memory.*` settings (also when memory is disabled).
     pub fn memory_settings(&self) -> &MemorySettings {
         &self.inner.memory_settings
+    }
+    /// Why built-in memory failed to open when `memory.prehandler.failOpen`
+    /// let the runtime start without it.
+    pub fn memory_initialization_error(&self) -> Option<&str> {
+        self.inner.memory_error.as_deref()
+    }
+    /// The state the RPC `memory` command reports on and acts against
+    /// (archived `ReferenceRpcRuntime` memory fields).
+    pub fn memory_rpc_context(&self) -> qt_memory::rpc::RpcMemoryContext {
+        qt_memory::rpc::RpcMemoryContext {
+            runtime: self.inner.memory.as_ref().map(|m| m.runtime().clone()),
+            settings: self.inner.memory_settings.clone(),
+            disabled_by_cli: self.inner.options.no_memory,
+            initialization_error: self.inner.memory_error.clone().unwrap_or_default(),
+            agent_home: self.inner.home.root().to_path_buf(),
+        }
     }
     /// Loaded extensions (`/extensions`, commands, UI).
     pub fn extensions(&self) -> &Extensions {

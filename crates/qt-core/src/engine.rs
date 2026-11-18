@@ -1091,6 +1091,45 @@ impl Engine {
         Conversation::new(self.clone(), session, model, SessionStartReason::New, None)
     }
 
+    /// A new conversation whose header records `parent_session` (Pi
+    /// `newSession({parentSession})`), replacing the session file
+    /// `previous`. In-memory with `--no-session`.
+    pub fn new_conversation_with_parent(
+        &self,
+        model: Option<ModelRef>,
+        parent_session: Option<String>,
+        previous: Option<PathBuf>,
+    ) -> Conversation {
+        let session = if self.inner.ephemeral_sessions {
+            Session::in_memory(&self.inner.cwd)
+        } else {
+            Session::create_with(
+                &self.session_dir(),
+                &self.inner.cwd,
+                session::new_session_id(),
+                parent_session.filter(|p| !p.is_empty()),
+            )
+        };
+        Conversation::new(
+            self.clone(),
+            session,
+            model,
+            SessionStartReason::New,
+            previous,
+        )
+    }
+
+    /// Resume a session file in place of the session file `previous`
+    /// (session switch: `session_start` reason `resume` with
+    /// `previousSessionFile`).
+    pub fn switch_conversation(
+        &self,
+        path: &Path,
+        previous: Option<PathBuf>,
+    ) -> Result<Conversation> {
+        self.open_conversation_with(path, None, SessionStartReason::Resume, previous)
+    }
+
     /// A conversation that is never written to disk (`--no-session`).
     pub fn new_ephemeral_conversation(&self, model: Option<ModelRef>) -> Conversation {
         let session = Session::in_memory(&self.inner.cwd);
@@ -3326,6 +3365,59 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_conversation_with_parent_and_switch_report_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(AgentHome::new(dir.path().join("home")), dir.path()).unwrap();
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let log = starts.clone();
+        engine
+            .hooks()
+            .add_session_listener(Arc::new(move |e: &SessionEvent| {
+                if let SessionEvent::Start {
+                    reason,
+                    previous_session_file,
+                    ..
+                } = e
+                {
+                    log.lock()
+                        .unwrap()
+                        .push((*reason, previous_session_file.clone()));
+                }
+            }));
+        let first = engine.new_conversation(None);
+        first.push_message_for_test(AgentMessage::Llm(Message::user_text("hi")));
+        first.push_message_for_test(AgentMessage::Llm(Message::Assistant(AssistantMessage {
+            stop_reason: StopReason::Stop,
+            ..Default::default()
+        })));
+        let parent = first.session_path();
+        let child = engine.new_conversation_with_parent(
+            None,
+            Some(parent.to_string_lossy().into_owned()),
+            Some(parent.clone()),
+        );
+        assert_eq!(
+            child.parent_session().as_deref(),
+            Some(parent.to_string_lossy().as_ref())
+        );
+        assert_ne!(child.session_id(), first.session_id());
+        let switched = engine
+            .switch_conversation(&parent, Some(child.session_path()))
+            .unwrap();
+        assert_eq!(switched.session_id(), first.session_id());
+        {
+            let starts = starts.lock().unwrap();
+            assert_eq!(starts[1], (SessionStartReason::New, Some(parent.clone())));
+            assert_eq!(
+                starts[2],
+                (SessionStartReason::Resume, Some(child.session_path()))
+            );
+        }
+        let empty = engine.new_conversation_with_parent(None, Some(String::new()), None);
+        assert_eq!(empty.parent_session(), None);
+    }
 
     #[test]
     fn conversation_requires_model_and_key() {

@@ -1,11 +1,12 @@
 //! `qt-cli`: the headless qt front end (archived `main.cpp` /
-//! `cli_startup.cpp`): print and JSON modes, `--list-models`, `--export`,
+//! `cli_startup.cpp`): print, JSON and RPC modes, `--list-models`, `--export`,
 //! session selection and the `install`/`remove`/`update`/`list`/`config`/
 //! `memory` subcommands. The interactive interface is the desktop app.
 
 mod args;
 mod help;
 mod list_models;
+mod rpc;
 mod run;
 mod session;
 
@@ -142,17 +143,14 @@ fn run(raw: &[String]) -> i32 {
         );
         return 1;
     }
-    if mode == StartupMode::Rpc {
-        eprintln!(
-            "Error: RPC mode is not available in qt-cli yet; use --mode json or the qt desktop app"
-        );
-        return 1;
-    }
     if let Err(message) = run::check_memory_child(&parsed) {
         eprintln!("Error: {message}");
         return 1;
     }
     let options = run::runtime_options(&parsed, mode, &cwd, &home);
+    if mode == StartupMode::Rpc {
+        return rpc::run(parsed, options);
+    }
     run::main(parsed, mode, stdin_is_tty, options)
 }
 

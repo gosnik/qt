@@ -21,7 +21,7 @@ pub enum RunMode {
     Print,
     /// `--mode json`: Pi event lines.
     Json,
-    /// `--mode rpc` (not implemented by qt-cli yet).
+    /// `--mode rpc`: JSONL commands on stdin, responses and events on stdout.
     Rpc,
 }
 

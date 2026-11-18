@@ -246,8 +246,7 @@ archived C++ qt (`archived/`).
   (the archived matcher missed directories because it matched `name/`).
 - **Not yet implemented** (see `PLAN.md`): GUI tree / fork / resume pickers and the
   missing-cwd dialog, provider-level retry (`retry.provider.*`, `Retry-After`), slash commands, skills, OAuth
-  logins, in-process llama.cpp, memory, extensions, MCP, subagents, the project index and
-  RPC mode.
+  logins, in-process llama.cpp, memory, extensions, MCP, subagents and the project index.
 
 ## In-process llama.cpp (`qt-llama`)
 
@@ -750,7 +749,6 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
     prompt on a terminal, `qt-cli` exits with a hint instead of opening the TUI; with
     messages it runs them as in print mode. `--resume` shows a numbered picker on the
     terminal. `--version` prints the crate version (the archived binary printed `0.0.0`).
-  - `--mode rpc` reports that RPC mode is not available yet.
   - `--api-key` is held in memory for the run and never written to `auth.json`.
   - A value after a boolean extension flag (`--plan task`) is kept as a message (the
     archived parser assigned it to the flag and failed).
@@ -758,6 +756,85 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
     OpenRouter) unless `--offline`.
   - `QT_SUBAGENT_ALLOW_EXTERNAL=0` in subagent children is not applied as a settings
     override (the child's workspace policy comes from its settings).
+
+## RPC mode (`qt-cli --mode rpc`)
+
+The archived `rpc_protocol.cpp`, `rpc_server.cpp` and `rpc_mode.cpp` and Pi's
+`modes/rpc/{rpc-types,rpc-mode,jsonl}.ts` are the reference.
+
+- **Framing:** one JSON object per line; records are split on `\n` only (U+2028/U+2029
+  inside strings are kept), a trailing `\r` is removed and a last line without LF is
+  read. Output is one JSON object per LF-terminated line on stdout; nothing else is
+  written there.
+- **Responses:** `{id?, type: "response", command, success: true, data?}` with `data`
+  omitted for `prompt`, `steer`, `follow_up`, `abort`, `set_thinking_level`, the queue
+  modes, `set_auto_compaction`, `set_auto_retry`, `abort_retry`, `abort_bash` and
+  `set_session_name`. Failures are `{id?, type, command, success: false, error,
+  error_code}`; codes follow the archive (`internal_error` by default, the memory
+  handler's `invalid_argument` / `io_error`, `rpc_error:<code>:` prefixes such as
+  `review_not_found`, `invalid_argument` when the `subagent` tool is disabled).
+  Unparseable lines answer `command: "parse"` (`Failed to parse command: …`); frames
+  that are not objects, lack `type`, carry an unknown type, are responses or events, or
+  repeat a request id answer `command: "invalid"` with the archived messages
+  (`unsupported rpc frame type`, `rpc server accepts command frames only, received
+  <type>`, `duplicate rpc request id: <id>`). Command validation uses the archived
+  messages (`prompt command message must not be empty`, `queue mode must equal 'all' or
+  'one-at-a-time'`, `memory command action is unsupported`, ...).
+- **Commands:** all Pi commands plus the archived `memory {action, params, confirm}`
+  (qt-memory `handle_memory_rpc`) and `subagent {action, arguments}` (persistent-worker
+  actions through the `subagent` tool). `prompt` runs extension commands (their output
+  lines become `notify` requests, failures `extension_error` with `extensionPath:
+  "command:<name>"`), then the `input` hooks (source `rpc`) and template / skill
+  expansion; it is acknowledged before the run's events, and while a run is active it
+  queues per `streamingBehavior` or fails with Pi's "Agent is already processing…".
+  `steer` / `follow_up` refuse extension commands and emit `queue_update` (the run emits
+  it while active). `abort` clears the queues, waits for the run to end and then
+  answers; `abort`, `abort_bash`, `abort_retry` and `extension_ui_response` are handled
+  as soon as they arrive, every other command in order. `get_state` reports the archived
+  fields; `get_messages`, `get_session_stats` (Pi stats plus the per-model breakdown),
+  `get_fork_messages`, `fork` (`{text, cancelled}`), `clone`, `new_session
+  {parentSession}` (recorded in the new header), `switch_session`, `export_html
+  {outputPath}`, `compact` (streams `compaction_start` / `_end`; a running agent is
+  aborted first), `bash` / `abort_bash` (`{output, exitCode, cancelled, truncated,
+  fullOutputPath?}`, recorded as `bashExecution`), the model, thinking and queue-mode
+  commands and `get_commands` (extension, prompt and skill commands with `sourceInfo`
+  and the registry diagnostics) follow Pi. `set_model`, `cycle_model` (scope from
+  `--models` / `enabledModels`, else all available models) and
+  `set_auto_compaction` / `set_auto_retry` / queue modes persist to settings as Pi does.
+- **Events:** the Pi event lines of every run (prompts, extension-triggered runs and
+  worker follow-ups) including `queue_update`, `compaction_start` / `_end`,
+  `auto_retry_start` / `_end`, `extension_error` (hook failures with the extension
+  path), `session_info_changed` and `{"type": "subagent_event", "subagent": …}` frames;
+  worker completions are also delivered to the parent as follow-ups and acknowledged.
+- **Extension UI:** `ctx.ui` dialogs emit `{type: "extension_ui_request", id (UUID v4),
+  method, …}` (`select {title, options, timeout?}`, `confirm {title, message,
+  timeout?}`, `input {title, placeholder?, timeout?}`, `editor {title, prefill?}`) and
+  block the extension until an `extension_ui_response` with `value`, `confirmed` or
+  `cancelled: true` arrives; a timeout or a cancelled answer gives the default
+  (`undefined` / `false`). `notify {message, notifyType}`, `setStatus {statusKey,
+  statusText?}`, `setWidget {widgetKey, widgetLines?}`, `setTitle` and
+  `set_editor_text` (also for paste) are fire-and-forget; `setTheme` fails with "Theme
+  switching not supported in RPC mode"; working indicators, header/footer and custom
+  components are no-ops. Answers for unknown ids are ignored; a second answer for the
+  same id fails with `duplicate extension ui response id: <id>`.
+- **Lifecycle:** `@file` arguments are rejected; positional messages are ignored. At end
+  of input open dialogs resolve to their defaults, queued commands finish, the process
+  waits for the active run and exits 0 (1 when stdin cannot be read).
+- **Differences:**
+  - Error responses carry the code twice, as the archived `error_code` and as
+    `errorCode`; Pi sends no code.
+  - The archived RPC ran each prompt synchronously and queued `streamingBehavior`
+    prompts even when idle; qt streams runs asynchronously as Pi does.
+  - `compact`, `fork` and `clone` also work for `--no-session` sessions (the archive
+    required a session file); `export_html` keeps the archived "Cannot export HTML: no
+    active session file".
+  - Models are reported in Pi's `Model` shape plus the archived `displayName` / `vision`;
+    `get_available_models` lists the models of providers with credentials (catalog,
+    discovered and a live discovery unless `--offline`), not the whole catalog.
+  - `abort_retry` cancels the run while an auto-retry is pending (Pi aborts only the
+    retry wait; the run then ends with the error either way). The `setWidget`
+    placement and the dialog `signal` option have no equivalent in the Rhai host API.
+  - SIGTERM/SIGHUP use the default handlers (no exit codes 143/129).
 
 ## Desktop GUI (`qt-app`)
 
