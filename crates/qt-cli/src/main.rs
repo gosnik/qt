@@ -17,8 +17,12 @@ answer. Reads the prompt from stdin when none is given.
 Options:
   -m, --model <provider/id>   Model to use (default: settings defaultProvider/defaultModel)
   -t, --thinking <level>      off | low | medium | high
-  -c, --continue              Continue the most recent session for this directory
-  -s, --session <path>        Continue a specific session file
+  -c, --continue              Continue the most recent session (this directory first)
+  -s, --session <path|id>     Continue a session file or session id prefix
+      --fork <path|id>        Copy a session into a new one and continue there
+      --session-dir <dir>     Session directory (overrides PI_CODING_AGENT_SESSION_DIR
+                              and the sessionDir setting)
+      --no-session            Do not save this conversation
       --cwd <dir>             Working directory (default: current directory)
       --list-models           List models from configured providers and exit
       --list-sessions         List sessions for the working directory and exit
@@ -30,7 +34,10 @@ struct Options {
     model: Option<ModelRef>,
     thinking: ThinkingLevel,
     continue_last: bool,
-    session: Option<PathBuf>,
+    session: Option<String>,
+    fork: Option<String>,
+    session_dir: Option<PathBuf>,
+    no_session: bool,
     cwd: Option<PathBuf>,
     list_models: bool,
     list_sessions: bool,
@@ -57,7 +64,10 @@ fn parse_args() -> Result<Option<Options>> {
                     .with_context(|| format!("unknown thinking level {level:?}"))?;
             }
             "-c" | "--continue" => opts.continue_last = true,
-            "-s" | "--session" => opts.session = Some(PathBuf::from(value("--session")?)),
+            "-s" | "--session" => opts.session = Some(value("--session")?),
+            "--fork" => opts.fork = Some(value("--fork")?),
+            "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
+            "--no-session" => opts.no_session = true,
             "--cwd" => opts.cwd = Some(PathBuf::from(value("--cwd")?)),
             "--list-models" => opts.list_models = true,
             "--list-sessions" => opts.list_sessions = true,
@@ -94,6 +104,7 @@ fn run() -> Result<ExitCode> {
         None => std::env::current_dir()?,
     };
     let engine = Engine::new(AgentHome::from_env(), cwd)?;
+    engine.set_session_dir(opts.session_dir.clone());
 
     if opts.list_models {
         for (provider, result) in engine.block_on(engine.list_models())? {
@@ -119,21 +130,24 @@ fn run() -> Result<ExitCode> {
         bail!("no prompt given\n\n{USAGE}");
     }
 
-    let session_path = match (opts.session, opts.continue_last) {
-        (Some(path), _) => Some(path),
-        (None, true) => Some(
-            engine
-                .sessions()
-                .first()
-                .context("no previous session in this directory")?
-                .path
-                .clone(),
-        ),
-        _ => None,
-    };
-    let conversation = match session_path {
-        Some(path) => engine.open_conversation(&path)?,
-        None => engine.new_conversation(engine.default_model()),
+    let conversation = if opts.no_session {
+        engine.new_ephemeral_conversation(engine.default_model())
+    } else if let Some(source) = &opts.fork {
+        engine.fork_session(&engine.resolve_session(source)?)?
+    } else if let Some(arg) = &opts.session {
+        let path = engine.resolve_session(arg)?;
+        if path.exists() {
+            if let Some(issue) = engine.session_cwd_issue(&path) {
+                bail!("{}", issue.error_text());
+            }
+            engine.open_conversation(&path)?
+        } else {
+            bail!("No session found matching '{arg}'");
+        }
+    } else if opts.continue_last {
+        engine.continue_recent(engine.default_model())?
+    } else {
+        engine.new_conversation(engine.default_model())
     };
     if let Some(model) = opts.model {
         conversation.set_model(model);
@@ -181,6 +195,21 @@ fn run() -> Result<ExitCode> {
                     }
                 }
                 AgentEvent::Warning(w) => eprintln!("warning: {w}"),
+                AgentEvent::RetryStart {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    error,
+                } => eprintln!(
+                    "retrying ({attempt}/{max_attempts}) in {:.1}s: {error}",
+                    delay_ms as f64 / 1000.0
+                ),
+                AgentEvent::CompactionStart { reason } => {
+                    eprintln!("compacting context ({})…", reason.as_str())
+                }
+                AgentEvent::CompactionEnd {
+                    error: Some(error), ..
+                } => eprintln!("{error}"),
                 AgentEvent::AgentEnd { usage, .. } => {
                     eprintln!(
                         "[{} in / {} out tokens{}]",
