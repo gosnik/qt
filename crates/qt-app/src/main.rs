@@ -8,6 +8,7 @@ mod composer;
 mod dialogs;
 mod extensions;
 mod index_panel;
+mod layout;
 mod llama_panel;
 mod login;
 mod mcp_panel;

@@ -507,7 +507,8 @@ impl MemoryPanel {
         let mut folders = v_flex()
             .id("memory-scan-folders")
             .gap_0p5()
-            .max_h(px(180.))
+            .flex_1()
+            .min_h(px(120.))
             .overflow_y_scroll();
         if let Some(parent) = self.folder.parent().map(Path::to_path_buf)
             && self.allowed(&parent)
@@ -536,6 +537,7 @@ impl MemoryPanel {
             );
         }
         v_flex()
+            .size_full()
             .gap_2()
             .child(section("SCAN SKILLS FOLDER", cx))
             .when(!enabled, |el| {
@@ -609,7 +611,13 @@ impl Render for MemoryPanel {
             Section::ScanSkills => "scan-skills",
             Section::Dream => "dream",
         };
-        let mut menu = v_flex().gap_0p5().w(px(230.)).flex_none();
+        let mut menu = v_flex()
+            .id("memory-menu")
+            .gap_0p5()
+            .w(px(230.))
+            .flex_none()
+            .h_full()
+            .overflow_y_scroll();
         for (i, (value, label, description)) in MENU.into_iter().enumerate() {
             menu = menu.child(
                 widgets::list_row(("memory-menu", i), label, description, value == current, cx)
@@ -617,7 +625,16 @@ impl Render for MemoryPanel {
             );
         }
         let disabled = self.host.memory().is_none();
-        let section = self.render_section(window, cx);
+        // The folder browser fills the panel and scrolls its own list; the
+        // form sections scroll as a whole when the window is short.
+        let fills = matches!(self.section, Section::ScanSkills);
+        let section = div()
+            .id("memory-section")
+            .flex_1()
+            .min_h_0()
+            .when(!fills, |el| el.overflow_y_scroll())
+            .when(fills, |el| el.flex().flex_col())
+            .child(self.render_section(window, cx));
         let output = widgets::output_box(
             "memory-panel-output",
             v_flex()
@@ -637,6 +654,7 @@ impl Render for MemoryPanel {
             cx,
         );
         v_flex()
+            .size_full()
             .gap_2()
             .when(disabled, |el| {
                 el.child(
@@ -652,13 +670,16 @@ impl Render for MemoryPanel {
             })
             .child(
                 h_flex()
+                    .flex_1()
+                    .min_h_0()
                     .gap_4()
-                    .items_start()
+                    .items_stretch()
                     .child(menu)
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
+                            .min_h_0()
                             .gap_2()
                             .child(section)
                             .when(self.busy.is_some() || !self.output.is_empty(), |el| {
@@ -672,11 +693,8 @@ impl Render for MemoryPanel {
 /// Opens the `/memory` panel on `section`.
 pub fn open(host: MemoryHost, section: Section, window: &mut Window, cx: &mut App) {
     let panel = cx.new(|cx| MemoryPanel::new(host, section, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Memory")
-            .w(px(900.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("Memory"), window, 900., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
