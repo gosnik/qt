@@ -292,6 +292,16 @@ impl Rpc {
         self.wait_for(&kind.clone(), |l| l["type"] == kind.as_str())
     }
 
+    /// The first `kind` event at or after `seen[mark]`, including lines
+    /// already read while waiting for a response (a running agent can emit
+    /// an event before the response to the command that caused it).
+    fn event_since(&mut self, mark: usize, kind: &str) -> Value {
+        match self.seen[mark..].iter().find(|l| l["type"] == kind) {
+            Some(line) => line.clone(),
+            None => self.event(kind),
+        }
+    }
+
     /// Prompt and wait until the run's `agent_end`.
     fn prompt(&mut self, message: &str) -> Value {
         self.call(json!({"type": "prompt", "message": message}));
@@ -431,8 +441,9 @@ fn prompt_streams_events_and_reports_state() {
     assert_eq!(busy["error_code"], "internal_error");
     assert_eq!(busy["errorCode"], "internal_error");
     assert_eq!(rpc.call(json!({"type": "get_state"}))["isStreaming"], true);
+    let mark = rpc.seen.len();
     rpc.call(json!({"type": "prompt", "message": "also this", "streamingBehavior": "followUp"}));
-    let update = rpc.event("queue_update");
+    let update = rpc.event_since(mark, "queue_update");
     assert_eq!(update["followUp"], json!(["also this"]));
     // The follow-up runs after the slow answer, in the same run.
     let end = rpc.event("agent_end");

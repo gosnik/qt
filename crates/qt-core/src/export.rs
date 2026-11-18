@@ -892,19 +892,16 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn share_uses_gh_and_reports_archived_errors() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
         let gh = dir.path().join("gh");
         let log = dir.path().join("log");
-        std::fs::write(
+        crate::test_support::write_script(
             &gh,
-            format!(
+            &format!(
                 "#!/bin/sh\necho \"$@\" >> {}\nif [ \"$1\" = auth ]; then exit ${{AUTH_EXIT:-0}}; fi\ntest -f \"$4\" || exit 9\necho https://gist.github.com/me/deadbeef\n",
                 log.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let result = share_html_gist(&gh, "<html></html>").await.unwrap();
         assert_eq!(result.gist_url, "https://gist.github.com/me/deadbeef");
         assert!(result.preview_url.ends_with("#deadbeef"));
@@ -923,8 +920,7 @@ mod tests {
             "GitHub CLI (gh) is not installed. Install it from https://cli.github.com/"
         );
         let failing = dir.path().join("gh2");
-        std::fs::write(&failing, "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&failing, "#!/bin/sh\nexit 1\n");
         assert_eq!(
             share_html_gist(&failing, "x")
                 .await
