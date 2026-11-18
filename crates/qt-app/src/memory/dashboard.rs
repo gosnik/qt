@@ -1389,6 +1389,12 @@ impl MemoryDashboard {
                     } else {
                         widgets::lines(&result.memories, false, cx)
                     })
+                    .child(section("CODE CANDIDATES", cx))
+                    .child(if result.code.is_empty() {
+                        hint("No code was retrieved.", cx)
+                    } else {
+                        widgets::lines(&result.code, false, cx)
+                    })
                     .child(section("CONTEXT MARKDOWN", cx))
                     .child(
                         Textarea::new(&self.context_markdown)

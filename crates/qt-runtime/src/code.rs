@@ -16,8 +16,9 @@ use qt_index::code_index::CodeIndex;
 use qt_index::scan::{ProjectFileKind, ProjectScanResult};
 use qt_memory::code::{
     CodeChunk, CodeEdge, CodeNode, CodeNodeKind, CodeSnapshot, CodeSnapshotProvider,
-    MAX_CHUNK_SOURCE_BYTES, fingerprint_text, node_id,
+    MAX_CHUNK_SOURCE_BYTES, fingerprint_text, node_id, source_fingerprint,
 };
+use qt_memory::retrieval::RetrievalReference;
 
 /// Window of at most this many bytes per chunk (archived `line_window`).
 const MAX_WINDOW_BYTES: usize = 32768;
@@ -335,8 +336,13 @@ impl IndexCodeSnapshots {
     }
 }
 
-impl CodeSnapshotProvider for IndexCodeSnapshots {
-    fn snapshot(&self) -> Option<Arc<CodeSnapshot>> {
+/// Archived warning when the index has no complete fingerprinted snapshot.
+pub const CODE_RETRIEVAL_UNAVAILABLE: &str =
+    "code retrieval unavailable: persisted index fingerprints are incomplete; rescan needed";
+
+impl IndexCodeSnapshots {
+    /// Snapshot of the current generation together with that generation.
+    fn current(&self) -> Option<(Arc<CodeSnapshot>, usize)> {
         let status = self.service.status();
         if status.generation == 0 {
             return None;
@@ -345,20 +351,103 @@ impl CodeSnapshotProvider for IndexCodeSnapshots {
         if let Some(c) = cached.as_ref()
             && c.generation == status.generation
         {
-            return Some(c.snapshot.clone());
+            return Some((c.snapshot.clone(), c.generation));
+        }
+        let scan = self.service.project_scan();
+        let code_index = self.service.code_index();
+        let fingerprints = self.service.fingerprints();
+        // Archived `load_persisted_snapshot` / scan publication: a retrieval
+        // snapshot exists only when every indexed path has a recorded
+        // fingerprint, and is never stale (each node is still checked
+        // against its file before use), so a snapshot loaded from disk is
+        // usable before this process has rescanned.
+        if !qt_index::store::complete_scan_fingerprints(&scan, &code_index, &fingerprints) {
+            return None;
         }
         let snapshot = Arc::new(build_snapshot(
-            &self.service.project_scan(),
-            &self.service.code_index(),
+            &scan,
+            &code_index,
             status.generation as u64,
-            &self.service.fingerprints(),
-            status.index_stale,
+            &fingerprints,
+            false,
         ));
         *cached = Some(Cached {
             generation: status.generation,
             snapshot: snapshot.clone(),
         });
-        Some(snapshot)
+        Some((snapshot, status.generation))
+    }
+}
+
+impl CodeSnapshotProvider for IndexCodeSnapshots {
+    fn snapshot(&self) -> Option<Arc<CodeSnapshot>> {
+        self.current().map(|(snapshot, _)| snapshot)
+    }
+
+    fn unavailable_reason(&self) -> Option<String> {
+        self.current()
+            .is_none()
+            .then(|| CODE_RETRIEVAL_UNAVAILABLE.to_string())
+    }
+
+    /// Archived `BackgroundService::retrieval_search`: exact name, qualified
+    /// name or path matches (by node id), then file nodes of the pinned
+    /// full-text matches in rank order; only nodes whose file still has the
+    /// recorded fingerprint. Nothing when the generation moves meanwhile.
+    fn lexical(&self, query: &str, limit: usize) -> Vec<RetrievalReference> {
+        let limit = limit.min(1000);
+        if query.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let Some((snapshot, generation)) = self.current() else {
+            return Vec::new();
+        };
+        let mut references: Vec<RetrievalReference> = Vec::new();
+        let mut add = |node: &CodeNode| {
+            if references.len() >= limit || references.iter().any(|r| r.id == node.id) {
+                return;
+            }
+            if source_fingerprint(&snapshot.root.join(&node.path)) != node.source_fingerprint {
+                return;
+            }
+            references.push(CodeSnapshot::reference(node));
+        };
+        let mut exact: Vec<&CodeNode> = snapshot
+            .nodes
+            .iter()
+            .filter(|n| n.name == query || n.qualified_name == query || n.path == query)
+            .collect();
+        exact.sort_by(|a, b| a.id.cmp(&b.id));
+        for node in exact {
+            add(node);
+        }
+        let terms = qt_index::store::retrieval_fts_query(query);
+        if !terms.is_empty() {
+            let database = self.service.status().sqlite_database;
+            if let Ok(matches) = qt_index::store::fts_search_pinned(
+                &database,
+                self.service.project_root(),
+                &terms,
+                limit,
+                generation,
+            ) {
+                let files: HashMap<&str, &CodeNode> = snapshot
+                    .nodes
+                    .iter()
+                    .filter(|n| n.kind == CodeNodeKind::File)
+                    .map(|n| (n.path.as_str(), n))
+                    .collect();
+                for m in &matches {
+                    if let Some(node) = files.get(m.path.as_str()) {
+                        add(node);
+                    }
+                }
+            }
+        }
+        if self.service.status().generation != generation {
+            return Vec::new();
+        }
+        references
     }
 }
 

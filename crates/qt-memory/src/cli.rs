@@ -863,6 +863,16 @@ fn execute(
                     .collect();
                 let status = runtime.retrieval_status();
                 let mut warnings = environment.retrieval_warnings.clone();
+                // Archived preview services: a code index without a usable
+                // persisted snapshot is reported, not silently skipped.
+                if settings.retrieval.code_enabled
+                    && let Some(reason) = environment
+                        .code
+                        .as_ref()
+                        .and_then(|code| code.unavailable_reason())
+                {
+                    warnings.push(reason);
+                }
                 for error in [&status.last_error, &status.queries.last_error] {
                     if !error.is_empty() {
                         warnings.push(error.clone());
