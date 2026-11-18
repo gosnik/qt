@@ -170,7 +170,7 @@ impl Workspace {
                 cx.spawn_in(window, async move |this, cx| {
                     let results = listing.await.unwrap_or_default();
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.set_models(results, window, cx);
+                        this.merge_models(results, true, window, cx);
                         window
                             .push_notification(Notification::info("Model catalogs refreshed"), cx);
                     });
@@ -239,7 +239,10 @@ impl Workspace {
                 self.open_model_picker(search.as_deref(), window, cx)
             }
             SlashAction::SelectScopedModels { .. } => {
-                self.open_settings(&super::OpenSettings, window, cx)
+                self.open_settings(&super::OpenSettings, window, cx);
+                if let Some(panel) = self.settings_view.as_ref().and_then(WeakEntity::upgrade) {
+                    panel.update(cx, |p, cx| p.focus_models(window, cx));
+                }
             }
             SlashAction::SelectThinking { current, levels } => {
                 self.open_thinking_picker(current, levels, window, cx)

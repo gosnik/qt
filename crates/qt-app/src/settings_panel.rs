@@ -141,6 +141,7 @@ pub struct SettingsPanel {
     models: Vec<(String, String)>,
     model_filter: Entity<InputState>,
     hooks: SettingsHooks,
+    scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -165,8 +166,18 @@ impl SettingsPanel {
             models,
             model_filter,
             hooks,
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Show the scoped-models section (`/scoped-models`): scroll to it and
+    /// focus its filter.
+    pub fn focus_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scroll.scroll_to_bottom();
+        self.model_filter
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
     }
 
     pub fn set_models(&mut self, models: Vec<(String, String)>, cx: &mut Context<Self>) {
@@ -334,6 +345,7 @@ impl Render for SettingsPanel {
             .gap_1()
             .max_h(px(600.))
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .pr_2()
             .child(heading("APPEARANCE", cx))
             .child(

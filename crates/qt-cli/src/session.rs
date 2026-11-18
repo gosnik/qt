@@ -33,6 +33,18 @@ fn missing(arg: &str) -> StartupStop {
     StartupStop::Error(format!("No session found matching '{arg}'"))
 }
 
+/// A failed id-prefix lookup: no match prints the archived bare
+/// `No session found matching '…'`; other failures (an ambiguous prefix)
+/// are `Error: …` lines.
+fn lookup_failed(arg: &str, error: &anyhow::Error) -> StartupStop {
+    let message = format!("{error:#}");
+    if message.starts_with("No session found matching") {
+        missing(arg)
+    } else {
+        StartupStop::Error(format!("Error: {message}"))
+    }
+}
+
 /// Ask `Continue/Cancel` on the terminal (archived prompt). `true` continues.
 fn confirm_missing_cwd(issue: &SessionCwdIssue) -> bool {
     print!("{}\n\n[Continue/Cancel] ", issue.prompt_text());
@@ -70,9 +82,6 @@ fn open_checked(
 
 /// Numbered session picker on the terminal (`--resume`).
 fn pick_session(engine: &Engine) -> Option<PathBuf> {
-    if !std::io::stdin().is_terminal() {
-        return None;
-    }
     let sessions = engine.sessions();
     if sessions.is_empty() {
         return None;
@@ -99,7 +108,7 @@ pub fn open(
     if let Some(source) = &parsed.fork {
         let path = engine
             .resolve_session(source)
-            .map_err(|_| missing(source))?;
+            .map_err(|e| lookup_failed(source, &e))?;
         if looks_like_path(source) && !has_header(&path) {
             return Err(StartupStop::Error(format!(
                 "Error: Cannot fork: source session file is empty or invalid: {source}"
@@ -116,7 +125,9 @@ pub fn open(
         return Ok(engine.new_ephemeral_conversation(model));
     }
     if let Some(arg) = &parsed.session {
-        let path = engine.resolve_session(arg).map_err(|_| missing(arg))?;
+        let path = engine
+            .resolve_session(arg)
+            .map_err(|e| lookup_failed(arg, &e))?;
         if !path.exists() {
             return Err(missing(arg));
         }
@@ -129,7 +140,14 @@ pub fn open(
         };
     }
     if parsed.resume {
-        return match pick_session(engine) {
+        // Without a terminal to pick on, the most recent session (this
+        // working directory first) is resumed, as in the archived binary.
+        let picked = if std::io::stdin().is_terminal() {
+            pick_session(engine)
+        } else {
+            engine.most_recent_session()
+        };
+        return match picked {
             Some(path) => open_checked(engine, &path, interactive),
             None => Err(StartupStop::Message("No session selected".into(), 0)),
         };

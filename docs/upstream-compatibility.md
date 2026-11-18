@@ -244,9 +244,11 @@ archived C++ qt (`archived/`).
   dropped every root in that case). Invalid resource settings become diagnostics rather than
   aborting startup. `.gitignore` patterns without a trailing slash also ignore directories
   (the archived matcher missed directories because it matched `name/`).
-- **Not yet implemented** (see `PLAN.md`): GUI tree / fork / resume pickers and the
-  missing-cwd dialog, provider-level retry (`retry.provider.*`, `Retry-After`), slash commands, skills, OAuth
-  logins, in-process llama.cpp, memory, extensions, MCP, subagents and the project index.
+- **Goal accounting:** wall time and tokens are charged to an active goal per assistant
+  message (time spent before the model marks the goal complete is kept); a changed goal is
+  written at the save point that follows the change, so the next request already omits
+  `update_goal` after completion. Accounted usage without a status change is saved when the
+  run ends.
 
 ## In-process llama.cpp (`qt-llama`)
 
@@ -831,7 +833,9 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
   - The binary is `qt-cli`; the help text names it and points at the desktop app. Without a
     prompt on a terminal, `qt-cli` exits with a hint instead of opening the TUI; with
     messages it runs them as in print mode. `--resume` shows a numbered picker on the
-    terminal. `--version` prints the crate version (the archived binary printed `0.0.0`).
+    terminal; without a terminal it resumes the most recent session (this folder first), as
+    the archived binary did. An ambiguous `--session` / `--fork` id prefix prints
+    `Error: Session prefix '…' is ambiguous; matches: …` (archived). `--version` prints the crate version (the archived binary printed `0.0.0`).
   - `--api-key` is held in memory for the run and never written to `auth.json`.
   - A value after a boolean extension flag (`--plan task`) is kept as a message (the
     archived parser assigned it to the flag and failed).
@@ -959,7 +963,12 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   (`clone-<id>`). The resume picker searches name, messages, id and folder across the
   current folder or all sessions and renames sessions. Import asks "Replace current session
   with <path>?" and resuming or importing a session whose stored cwd is gone shows Pi's
-  "Session cwd not found" prompt (Continue/Cancel). The transcript reloads after compaction
+  "Session cwd not found" prompt (Continue/Cancel). `qt` accepts the archived interactive
+  session flags: `-c`/`--continue` (most recent session, this folder first), `-r`/`--resume`
+  (opens the resume picker), `--session <path|id>`, `--fork <path|id>` (a `fork-<id>` copy),
+  `--no-session` and `--session-dir`; unknown ids print `No session found matching '…'` and
+  exit 1, and `--fork` / `--no-session` conflicts use the CLI wording. Enter saves a label
+  being edited in the tree. The transcript reloads after compaction
   and tree navigation and renders compaction (`[compaction] Compacted from N tokens`), branch
   summary (`[branch]`) and displayed custom messages (`[customType]`).
 - **Run controls:** Enter while running steers, Alt+Enter queues a follow-up, Alt+Up (or the
@@ -975,7 +984,9 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   compaction) are omitted and the prompt-history limit belongs to the prompt history work.
   `enabledModels` accepts exact `provider/id` specs, bare ids and `*` globs (Pi) and limits
   the model picker; toggling from "all" first expands to every discovered model (archived
-  `/scoped-models`). The thinking picker offers the selected model's levels and clamps the
+  `/scoped-models`, which opens Settings scrolled to this section with its filter focused).
+  `/model refresh` and the five-minute background refresh replace only the OpenAI and
+  OpenRouter entries of the picker; models of other providers (Ollama, llama.cpp) are kept. The thinking picker offers the selected model's levels and clamps the
   current level (upwards first, Pi).
 - **Composer:** clipboard images and dropped image files become attachments (chips with
   size and dimensions) prepared with `images.autoResize`; Pi's resize note is appended to the
@@ -996,16 +1007,11 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   a searchable model picker, a thinking picker, tree, resume, fork picker, login, Ollama,
   import (with the missing-cwd prompt) and quit (`/exit` too, archived alias). `/name` without
   arguments opens the rename dialog. `/memory` runs through the memory views (see "Governed
-  memory in the desktop app"). `/llama`, `/index`, `/mcp`, `/subagent`,
-  `/extensions`, `/skills`, `/prompts` and extension commands show "… is not available in this
-  build." until their panels and the extension runtime are wired. An unknown `/name` is an
-
-  arguments opens the rename dialog. Bare `/index`, `/mcp`, `/llama` and `/subagent` open
+  memory in the desktop app"). Bare `/index`, `/mcp`, `/llama` and `/subagent` open
   their panels; with arguments they run the shared runtime command and show a card.
   `/extensions`, `/skills`, `/prompts`, `/themes` open the package resource selectors,
   `/reload` reloads extensions and resources, and extension commands run off the UI thread
-  (see the extensions section). `/memory` shows "… is not available in this build." until
-  its panel is wired. An unknown `/name` is an
+  (see the extensions section). An unknown `/name` is an
   error card (archived); a first word containing `/` (a path) is sent as a prompt.
 - **`/tools`:** a panel with a checkbox per tool (filter, enable/disable all) persisted through
   `Conversation::set_tool_enabled` (`tools-config` entry), plus the mutation approval queue:

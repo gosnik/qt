@@ -18,15 +18,15 @@ mod run_status;
 mod session_views;
 mod sessions;
 mod settings_panel;
+mod startup;
 mod subagent_panel;
 mod theme;
 mod transcript;
 mod workspace;
 
-use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use gpui_kit::*;
 use qt_runtime::{Runtime, RuntimeOptions};
 
@@ -41,44 +41,33 @@ impl Global for RuntimeGlobal {}
 /// How long quitting waits for memory capture to flush.
 const SHUTDOWN_CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 
-const USAGE: &str = "Usage: qt [--cwd <dir> | <dir>]\n\nOpens the qt desktop app for a project directory (default: current directory).\nUse qt-cli for headless runs.\n";
-
-fn parse_cwd() -> Result<Option<PathBuf>> {
-    let mut args = std::env::args().skip(1);
-    let mut cwd = None;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                print!("{USAGE}");
-                return Ok(None);
-            }
-            "--cwd" => {
-                cwd = Some(PathBuf::from(
-                    args.next().context("--cwd needs a directory")?,
-                ))
-            }
-            other if other.starts_with('-') => anyhow::bail!("unknown option {other}\n\n{USAGE}"),
-            other => cwd = Some(PathBuf::from(other)),
-        }
+fn main() -> Result<()> {
+    let args = startup::parse_args(std::env::args().skip(1))?;
+    if args.help {
+        print!("{}", startup::USAGE);
+        return Ok(());
     }
-    let cwd = match cwd {
-        Some(dir) => dir,
+    let cwd = match &args.cwd {
+        Some(dir) => dir.clone(),
         None => std::env::current_dir()?,
     };
     anyhow::ensure!(cwd.is_dir(), "{} is not a directory", cwd.display());
-    Ok(Some(cwd))
-}
-
-fn main() -> Result<()> {
-    let Some(cwd) = parse_cwd()? else {
-        return Ok(());
-    };
-    let runtime = Runtime::build(RuntimeOptions::interactive(cwd))?;
+    let mut options = RuntimeOptions::interactive(cwd.clone());
+    options.no_session = args.no_session;
+    options.session_dir = args.session_dir.as_ref().map(|dir| cwd.join(dir));
+    let runtime = Runtime::build(options)?;
     for diagnostic in runtime.diagnostics() {
         eprintln!("qt: {diagnostic}");
     }
-    runtime.start_background_services();
     let engine = runtime.engine().clone();
+    let startup = match startup::resolve(&engine, &args.session) {
+        Ok(action) => action,
+        Err(err) => {
+            eprintln!("{err:#}");
+            std::process::exit(1);
+        }
+    };
+    runtime.start_background_services();
     let project = engine
         .cwd()
         .file_name()
@@ -104,8 +93,16 @@ fn main() -> Result<()> {
                 ..Default::default()
             };
             let engine = engine.clone();
+            let startup = startup.clone();
             if let Err(err) = gpui_kit::open_window(options, cx, move |window, cx| {
-                cx.new(|cx| Workspace::new(engine, window, cx))
+                let startup = startup.clone();
+                cx.new(|cx| {
+                    let workspace = Workspace::new(engine, window, cx);
+                    cx.defer_in(window, move |this: &mut Workspace, window, cx| {
+                        this.apply_startup(startup, window, cx)
+                    });
+                    workspace
+                })
             }) {
                 eprintln!("qt: failed to open window: {err:#}");
                 cx.quit();

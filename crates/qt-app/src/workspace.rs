@@ -281,6 +281,7 @@ impl Workspace {
         this.transcript
             .update(cx, |t, cx| t.set_hide_thinking(hide, cx));
         this.refresh_models(window, cx);
+        this.watch_model_refresh(window, cx);
         this.reload_history(window, cx);
         this.composer
             .update(cx, |state, cx| state.focus(window, cx));
@@ -298,6 +299,27 @@ impl Workspace {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Apply the runtime's periodic OpenAI / OpenRouter refresh (every five
+    /// minutes, Pi) to the model picker.
+    fn watch_model_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(listings) = cx.global::<crate::RuntimeGlobal>().0.model_refresh() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(results) = listings.recv().await {
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        this.merge_models(results, false, window, cx)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn provider_label(&self, id: &str) -> String {
@@ -327,6 +349,38 @@ impl Workspace {
             }
         }
         self.models = models;
+        self.models_changed(window, cx);
+    }
+
+    /// A partial listing (`/model refresh`, the periodic refresh): models of
+    /// the providers that answered replace that provider's entries; models
+    /// of every other provider are kept. Failures are reported only when
+    /// `report_errors` is set.
+    fn merge_models(
+        &mut self,
+        results: Vec<(String, Result<Vec<ModelInfo>, String>)>,
+        report_errors: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.models_loading = false;
+        let mut models = std::mem::take(&mut self.models);
+        merge_listing(&mut models, &results);
+        self.models = models;
+        if report_errors {
+            for (provider, result) in &results {
+                if let Err(err) = result {
+                    window.push_notification(
+                        Notification::error(format!("{}: {err}", self.provider_label(provider))),
+                        cx,
+                    );
+                }
+            }
+        }
+        self.models_changed(window, cx);
+    }
+
+    fn models_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(window_size) = self
             .conversation
             .model()
@@ -690,6 +744,30 @@ impl Workspace {
     fn new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
         let conversation = self.engine.new_conversation(self.conversation.model());
         self.switch_to(conversation, window, cx);
+    }
+
+    /// Apply the command line's session choice once the window is open.
+    pub fn apply_startup(
+        &mut self,
+        action: crate::startup::StartupAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::startup::StartupAction;
+        match action {
+            StartupAction::None => {}
+            StartupAction::Open(path) => self.open_session(path, window, cx),
+            StartupAction::Resume => self.open_resume(&OpenResume, window, cx),
+            StartupAction::Fork(path) => match self.engine.fork_session(&path) {
+                Ok(conversation) => {
+                    self.switch_to(conversation, window, cx);
+                    self.sessions = self.engine.sessions();
+                }
+                Err(err) => {
+                    window.push_notification(Notification::error(format!("Error: {err:#}")), cx)
+                }
+            },
+        }
     }
 
     /// Resume `path`, asking first when its working directory is gone.
@@ -1910,6 +1988,20 @@ impl Render for Workspace {
     }
 }
 
+/// Replace the models of every provider that answered in `results`; models
+/// of providers that are absent or failed stay as they were.
+fn merge_listing(
+    models: &mut Vec<ModelInfo>,
+    results: &[(String, Result<Vec<ModelInfo>, String>)],
+) {
+    for (provider, result) in results {
+        if let Ok(list) = result {
+            models.retain(|m| &m.provider != provider);
+            models.extend(list.iter().cloned());
+        }
+    }
+}
+
 fn tokens(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1e6)
@@ -1923,7 +2015,32 @@ fn tokens(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the gpui glob import would shadow `#[test]`.
-    use super::tokens;
+    use super::{merge_listing, tokens};
+    use qt_core::ModelInfo;
+
+    fn model(provider: &str, id: &str) -> ModelInfo {
+        ModelInfo {
+            provider: provider.into(),
+            id: id.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn partial_listings_keep_other_providers() {
+        let mut models = vec![
+            model("ollama:local", "qwen"),
+            model("openai", "gpt-old"),
+            model("openrouter", "x"),
+        ];
+        let results = vec![
+            ("openai".to_string(), Ok(vec![model("openai", "gpt-new")])),
+            ("openrouter".to_string(), Err("offline".to_string())),
+        ];
+        merge_listing(&mut models, &results);
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["qwen", "x", "gpt-new"]);
+    }
 
     #[test]
     fn formats_tokens() {

@@ -458,6 +458,9 @@ pub struct GoalCell {
     pub goal: Option<Goal>,
     /// Set when the tool changed the goal; the conversation persists it.
     pub dirty: bool,
+    /// Usage (tokens, time) was accounted since the goal was last saved;
+    /// it is saved with the next change or when the run ends.
+    pub unsaved_usage: bool,
 }
 
 pub type GoalSlot = Arc<Mutex<GoalCell>>;
