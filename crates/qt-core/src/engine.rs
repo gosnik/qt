@@ -1565,6 +1565,19 @@ impl Conversation {
         )
     }
 
+    /// Persist extension state as a `custom` entry; while a run is active
+    /// it is written at the next save point.
+    pub fn append_custom_entry(&self, custom_type: &str, data: Option<Value>) -> Result<()> {
+        let mut state = self.lock();
+        Self::record_entry(
+            &mut state,
+            EntryKind::Custom {
+                custom_type: custom_type.into(),
+                data,
+            },
+        )
+    }
+
     // ----- session metadata ------------------------------------------------
 
     pub fn name(&self) -> Option<String> {

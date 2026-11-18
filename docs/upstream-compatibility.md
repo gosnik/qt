@@ -449,3 +449,70 @@ Pi has no persistent-memory contract; the archived qt is the reference.
   OpenRouter; `enabledModels` scoping follows Pi `resolveModelScope` (globs with
   `:level`, exact references, alias preference, warnings). `model_scope::render_model_table`
   reproduces the archived `--list-models` columns and number formatting.
+
+## Extensions (`qt-extensions`)
+
+Ported from the archived `extensions/` subsystem, the runtime bindings in
+`app/runtime/extension_*.cpp`, the package manager (`tools/package_manager_*.cpp`,
+`app/cli/package_command.cpp`) and Pi's extension API shapes. The Rhai API is
+documented in [extensions.md](extensions.md).
+
+- **Same as archived:** discovery order (`-e`, `<workspace>/.pi/extensions`,
+  `<agent_home>/extensions`, project then user settings packages with their
+  `extensions` filters; `--no-extensions` keeps `-e`), canonical-path dedup,
+  directory scan rules (`extension.json`, `package.json` `pi.extensions` with
+  `!`/`+`/`-` patterns, index files, direct files, recursion, hidden and
+  `node_modules` skipped), extension naming, manifest v1 fields, defaults and
+  validation messages (`invalid_argument [field]: message`), loader diagnostics,
+  the static scan of `.ts`/`.js` modules and the not-implemented API diagnostics,
+  registration rules and messages (lifecycle event list, handler identifiers,
+  resource types and path safety, flag types and defaults, shortcut and renderer
+  checks), `command_<name>`/`tool_<name>` handler naming, the sandbox limits (256 KB
+  source, 100 000 steps per invocation, no imports, nested depth 8, concurrent entry
+  rejected as `... is reentrant`), host method names, argument shapes and error
+  wording (`unknown active tool`, `invalid thinking level`,
+  `exec timeout must be positive`, `ctx.getModel requires string provider and id fields`,
+  `invalid extension message delivery mode`), the public model metadata allowlist,
+  headless UI results (cancelled dialogs, `false` confirm, stderr notifications),
+  UI argument validation messages, lifecycle result decoding and merge rules
+  (input continue/transform/handled, before_agent_start message + system prompt
+  chain, tool_call block, tool_result replacement, session_before_* cancel), the
+  JSON-RPC 2.0 framing and validation messages, `qt.command.invoke` /
+  `qt.tool.invoke` / `qt.event.<event>` with one process per invocation (request on
+  stdin, stdin closed, 30 s limit, stderr as diagnostics), command result text
+  formatting, package source parsing and identities (npm, git, local), install
+  paths, `npmCommand`, update candidates and skip reasons, offline mode, settings
+  `packages` entries and filters, `qt install/remove/update/list/config` argument
+  parsing, messages and output.
+- **Differences:**
+  - Scripts are Rhai instead of AngelScript. Handlers take and return Rhai values
+    (maps) instead of JSON strings; `qt_host_call`, `qt_json_get` and
+    `qt_json_string` keep the JSON-text forms. Host methods are also available as
+    `pi::name(args)`, `ctx::name(args)` and `ctx::ui::name(args)`. Persistent state
+    lives in the `this` map (Rhai functions cannot read global variables).
+    `registerFlag`'s default is a value, not JSON text. Handlers may be given as
+    `Fn("name")`; tools may declare a `parameters` schema and an explicit handler.
+  - `index.rhai` is preferred over `index.ts`/`index.js` (the archived loader preferred
+    the TypeScript index, so a package shipping both never ran its native script).
+  - An `extension.json` with `"transport": "rhai"` loads and activates its
+    entrypoint (the archived loader kept AngelScript manifests as metadata only).
+  - Session mutations other than `ctx.compact` are allowed during a run; qt-core
+    defers them to the next save point instead of rejecting them.
+  - Lifecycle events are delivered through qt-core hooks. `turn_start`/`turn_end` are
+    derived from assistant-response boundaries; `message_end` and `tool_call` results
+    cannot replace the message or the tool input (qt-core hooks do not support it),
+    only block; `before_provider_request` patches `systemPrompt`, `messages`,
+    `maxTokens` and `temperature` of qt's request rather than a provider payload.
+  - Packages: install/remove/update run the npm/git commands (the archived CLI only
+    printed them; `PackageRunOptions { execute: false }` restores that), and user-scope
+    git sources get a path under `<agent_home>/git` (the archived CLI planned them
+    without an agent home and skipped them). Removing a git checkout deletes it
+    in-process instead of running `rm -rf`.
+  - `ctx.ui.getEditorComponent` reports the presenter's component;
+    `ctx.ui.onTerminalInput` (terminal-only) is unsupported except for clearing.
+- **Not yet wired** (owned by the composition root / front ends): registering
+  `Extensions::tools()` with the engine, `install_hooks`, the `-e` /
+  `--no-extensions` / extension-flag CLI parsing, `run_package_command` as
+  `qt install|remove|update|list|config`, the slash-command registry, a GPUI
+  `ExtensionUi` (dialogs, status, widgets, header/footer, components,
+  autocomplete, renderers, shortcuts), `/extensions` package toggles and `/reload`.
