@@ -5081,12 +5081,15 @@ dependencies = [
 name = "qt-memory"
 version = "0.1.0"
 dependencies = [
+ "futures",
+ "qt-core",
  "rand 0.9.5",
  "regex",
  "rusqlite",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

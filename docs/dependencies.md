@@ -87,6 +87,9 @@ from the lists above.
 `qt-extensions` also uses `qt-core`, `async-channel`, `dirs`, `futures`, `serde`,
 `serde_json`, `tokio`, `tokio-util` and `tempfile` (dev) from the lists above.
 
+`qt-memory` also uses `qt-core` (messages, hooks and the `Tool` trait), `futures`, `tokio`
+(blocking tool execution) and `tempfile` (the dense-indexing spool) from the lists above.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including

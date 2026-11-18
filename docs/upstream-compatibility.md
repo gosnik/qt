@@ -516,3 +516,57 @@ documented in [extensions.md](extensions.md).
   `qt install|remove|update|list|config`, the slash-command registry, a GPUI
   `ExtensionUi` (dialogs, status, widgets, header/footer, components,
   autocomplete, renderers, shortcuts), `/extensions` package toggles and `/reload`.
+
+## Governed memory: recall, context and capture (`qt-memory`, wave 2A)
+
+The archived qt is the reference (`recall_service`, `retrieval_*`, `dense_retrieval`,
+`context_service`, `prehandler_protocol`, `coordinator`, `ingestion_service`, `runtime`,
+`memory_tool`, `memory_command`, RPC memory actions, `/memory`).
+
+- **Same behaviour:**
+  - Lexical recall: FTS5 candidates, 256-bucket signed hashed-token similarity (archived
+    FNV constant), score weights 0.28/0.22/0.18/0.10/0.08/0.14, +0.08 validated, ×0.68
+    candidate, ×0.78 hypothesis, freshness `exp(-days/180)` on whole hours, archived warning
+    texts, source-drift and critical-conflict exclusion, tag filters, access counts.
+  - Structured recall (entities, aliases, assertions, `as_of` historical snapshots), entity
+    assertion paths and memory graph traversal with the archived budgets and directions;
+    RRF fusion `1/(60+rank)` over lexical, graph and dense ranks (`owner-rrf-v2` ordering:
+    RRF, scope, total, id).
+  - Retrieval storage: durable index jobs with leases, renewal, retry backoff and attempt
+    exhaustion, 2 KiB/128-byte UTF-8-safe chunking, dense generations with the archived
+    `f32le-v1` config contract, activation only after complete backfill, owner-distinct
+    cosine search, revision-pinned dense evidence, code-owner publication from a snapshot,
+    cross-store links with `uri:` evidence and the rebuild report.
+  - Dense query service with the bounded query-embedding LRU (entries and bytes) and its
+    failure statistics; code recall with `code_bm25`, dense and `code_graph` ranks fused at
+    k=60, interleaved memory/code seeds and validated contextual assertion seeds.
+  - Context rendering: the `<qt_memory_context>` preamble, category headings and weights
+    (pinned 20, procedures 20, memories 30, episodes 15, evidence 10, warnings 5, code 25),
+    quota then fill, the 900-token default at 4 bytes per token, `[Memory id; status=…;
+    confidence=…]` headers (C++ `%g` formatting), atomic graph, assertion and mixed
+    memory/entity/code bundles, final revalidation and explanations.
+  - Pre-handler protocol v1: request encoding and `candidate_pack_hash`, strict result
+    validation (unknown/missing fields, types, unknown IDs, control characters, budget),
+    parent-owned envelope, fixed system prompt, child arguments and environment,
+    deterministic fallback, final revalidation and `recall_receipt` session events.
+  - Capture: episode transcript, durable spool under `memory/capture_pending/` with restart
+    recovery, `completed_episode` / `recall_outcome` / `recall_attribution` /
+    `completed_episode_receipt` events, procedure feedback from attribution, keyword
+    extraction (17 signals, 0.72 confidence), capture receipts, semantic consolidation
+    claims and review proposals.
+  - Memory tools, `qt memory` commands (help text, options, outputs, exit codes), RPC memory
+    actions (including review error codes `rpc_error:<code>:…`) and `/memory` lines.
+- **Differences:**
+  - The provider-only memory message is a plain user message; qt-core messages carry no
+    `name`/metadata, so the archived `qt_memory_context` name and metadata are not sent.
+  - The logical input sequence is the number of user messages in the request and the
+    projection epoch is a hash of the earlier user inputs (qt-core has no projection
+    epoch); recall still runs once per user input.
+  - `memory.prehandler.failOpen = false` cannot abort a request: qt-core model-context
+    augmentors cannot fail, so a failed augmentation always proceeds without memory.
+  - Code recall reads a `CodeSnapshot` supplied by the project index and a lexical provider;
+    without an index FTS provider only exact symbol names match.
+  - `/memory scan-skills` and the views (menu, dashboard, settings, review inbox, folder
+    picker) are returned as actions for the front end instead of TUI overlays.
+  - Dreaming, post-processing and research are reached through `CaptureHooks` and
+    `DreamingControl`; without them `/memory dream run` reports that no cycle was queued.
