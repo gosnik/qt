@@ -566,6 +566,83 @@ pub fn fts_search(
     }))
 }
 
+/// One file-level full-text match of a pinned search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinnedFtsMatch {
+    pub path: String,
+    pub kind: String,
+    pub rank: f64,
+}
+
+/// The FTS5 query for a free-text code-recall query (archived
+/// `lexical_query`): words of ASCII alphanumerics, `_` and non-ASCII bytes
+/// from the first 16384 bytes, at most 32, each quoted and joined by `OR`.
+/// Empty when the query has no lexical terms.
+pub fn retrieval_fts_query(query: &str) -> String {
+    let bytes = query.as_bytes();
+    let bytes = &bytes[..bytes.len().min(16384)];
+    let mut terms: Vec<String> = Vec::new();
+    let mut word: Vec<u8> = Vec::new();
+    let mut flush = |word: &mut Vec<u8>| {
+        if !word.is_empty() && terms.len() < 32 {
+            terms.push(format!("\"{}\"", String::from_utf8_lossy(word)));
+        }
+        word.clear();
+    };
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 128 {
+            word.push(byte);
+        } else {
+            flush(&mut word);
+        }
+    }
+    flush(&mut word);
+    terms.join(" OR ")
+}
+
+/// Full-text search pinned to one persisted generation (archived
+/// `sqlite_fts_search_payload_pinned`): fails with a "stale" error when the
+/// database belongs to another schema, project root or generation, so code
+/// recall never maps matches onto a snapshot they were not indexed for.
+pub fn fts_search_pinned(
+    database: &Path,
+    project_root: &Path,
+    query: &str,
+    limit: usize,
+    generation: usize,
+) -> Result<Vec<PinnedFtsMatch>, FtsError> {
+    if query.is_empty() {
+        return Err(FtsError::EmptyQuery);
+    }
+    let fail = |e: rusqlite::Error| FtsError::Failed(e.to_string());
+    let mut db = open(database, true).map_err(fail)?;
+    let tx = db.transaction().map_err(fail)?;
+    if get_meta(&tx, "schema_version").map_err(fail)? != SCHEMA_VERSION.to_string()
+        || get_meta(&tx, "project_root").map_err(fail)? != canonical_root_text(project_root)
+        || get_meta(&tx, "generation").map_err(fail)? != generation.to_string()
+    {
+        return Err(FtsError::Failed(
+            "sqlite index snapshot generation is stale".into(),
+        ));
+    }
+    let mut stmt = tx
+        .prepare(
+            "SELECT path, kind, rank FROM index_fts WHERE index_fts MATCH ?1 \
+             ORDER BY rank LIMIT ?2;",
+        )
+        .map_err(fail)?;
+    let rows = stmt
+        .query_map(params![query, limit as i64], |r| {
+            Ok(PinnedFtsMatch {
+                path: r.get(0)?,
+                kind: r.get(1)?,
+                rank: r.get(2)?,
+            })
+        })
+        .map_err(fail)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(fail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,5 +722,29 @@ mod tests {
             fts_search(&database, &root, "\"unbalanced", 1),
             Err(FtsError::Failed(_))
         ));
+
+        // Pinned search only answers for the persisted generation.
+        let query = retrieval_fts_query("who calls ignite()?");
+        assert_eq!(query, "\"who\" OR \"calls\" OR \"ignite\"");
+        let pinned = fts_search_pinned(&database, &root, &query, 10, 3).unwrap();
+        assert!(pinned.iter().any(|m| m.path == "src/engine.cpp"));
+        let stale = fts_search_pinned(&database, &root, &query, 10, 4).unwrap_err();
+        assert!(stale.to_string().contains("stale"));
+        assert_eq!(
+            fts_search_pinned(&database, &root, "", 10, 3),
+            Err(FtsError::EmptyQuery)
+        );
+    }
+
+    #[test]
+    fn retrieval_fts_query_follows_the_archived_tokenizer() {
+        assert_eq!(retrieval_fts_query("  ...  "), "");
+        assert_eq!(retrieval_fts_query("a-b c_d"), "\"a\" OR \"b\" OR \"c_d\"");
+        assert_eq!(retrieval_fts_query("über x"), "\"über\" OR \"x\"");
+        let many = (0..40)
+            .map(|i| format!("w{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(retrieval_fts_query(&many).matches(" OR ").count(), 31);
     }
 }

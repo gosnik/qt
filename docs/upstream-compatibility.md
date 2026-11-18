@@ -336,8 +336,13 @@ Ported from the archived `index` subsystem and `tools/index_tool.cpp`.
   scan and code index into the memory `CodeSnapshot` exactly as the archived
   `RetrievalSnapshot::build` (node ids, 48-line file windows, 16/32-line symbol windows,
   signature discriminators, `contains_file`/`defines`/`calls` edges, ambiguity suffixes),
-  rebuilt per index generation. Code-recall lexical matches use exact symbol names (the
-  archived FTS-backed `retrieval_search` provider is not ported).
+  rebuilt per index generation. As archived, a snapshot exists only when every indexed
+  path has a recorded fingerprint and is never marked stale (each node is still checked
+  against its file before use), so a snapshot loaded from disk serves code recall before
+  the process rescans (RPC, print mode and `qt memory explain` do not start the scanner).
+  Code-recall lexical matches follow the archived `retrieval_search`: exact name,
+  qualified-name or path matches, then the file nodes of `index_fts` matches pinned to the
+  snapshot generation (at most 32 quoted words joined by `OR`).
 - **Fixes:** `.gitignore` rules are re-read on every scan (the archived matcher cached them
   for the life of the process); an FTS5 syntax error now surfaces as
   `invalid FTS5 query: ...` instead of silently returning no matches; scans triggered by
@@ -678,8 +683,12 @@ The archived qt is the reference (`recall_service`, `retrieval_*`, `dense_retrie
     assistant error, and a memory runtime that cannot open aborts startup with
     `unable to initialize built-in memory: <error>` (archived). A failed or invalid
     pre-handler child still falls back to the deterministic context, as archived.
-  - Code recall reads a `CodeSnapshot` supplied by the project index and a lexical provider;
-    without an index FTS provider only exact symbol names match.
+  - Code recall reads a `CodeSnapshot` supplied by the project index and its lexical
+    provider (exact names, then pinned full-text file matches). `qt memory explain` reports
+    `code retrieval unavailable: persisted index fingerprints are incomplete; rescan needed`
+    when code recall is enabled without a usable persisted index, as archived. The
+    dashboard context preview lists each code candidate with its retriever ranks, fused
+    score and pack selection (the archived dashboard's `code_candidates`).
   - `/memory scan-skills` and the views (menu, dashboard, settings, review inbox, folder
     picker) are returned as actions for the front end instead of TUI overlays.
   - Dreaming, post-processing and research are reached through `CaptureHooks` and
@@ -709,6 +718,14 @@ The archived qt is the reference (`runtime.cpp`, `post_processing_service.cpp`,
   claim/receipt, CPU retry after an out-of-device-memory failure) and the
   `/memory dream [status|run|research <json>]` and RPC `dream` texts all follow the archive.
   Prompts are verbatim.
+- **Verification (2026-11-18):** the `researchPolicy = required` / `promotionPolicy =
+  auto_validate` cycle ran through real child processes (`crates/qt-runtime/tests/
+  memory_dream_cycle.rs`): a real `qt-cli` Dream child and verifier child on a local
+  llama.cpp model (Qwen2.5-3B, CPU) with the research child replaced by a local stub process
+  that prints the JSON-mode `web_search` / `web_fetch` events; the researched successor was
+  validated by the verifier and the Dream stayed a pending artifact. The real research
+  child's web tools reach only public hosts and there is no archived endpoint override, so
+  the research child itself has not been run against the web.
 - **Differences:**
   - The child runner is a trait (`IsolatedChild`); `ProcessChild` launches a
     `qt --mode json` child, and the composition root may instead supply an in-process

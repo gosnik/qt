@@ -508,3 +508,48 @@ fn hooks_capture_runs_and_lifecycle() {
     );
     assert_eq!(payload["turn_index"], 1);
 }
+
+const CODE_UNAVAILABLE: &str =
+    "code retrieval unavailable: persisted index fingerprints are incomplete; rescan needed";
+
+/// A project index without a usable snapshot.
+struct NoSnapshot;
+
+impl qt_memory::code::CodeSnapshotProvider for NoSnapshot {
+    fn snapshot(&self) -> Option<Arc<qt_memory::code::CodeSnapshot>> {
+        None
+    }
+
+    fn unavailable_reason(&self) -> Option<String> {
+        Some(CODE_UNAVAILABLE.into())
+    }
+}
+
+#[test]
+fn cli_explain_reports_unavailable_code_retrieval() {
+    let env = Env::new();
+    let explain = |code_enabled: bool| {
+        let mut settings = MemorySettings {
+            enabled: true,
+            ..Default::default()
+        };
+        settings.retrieval.code_enabled = code_enabled;
+        let output = run_memory_command(
+            &["explain", "checksum", "--json"].map(String::from),
+            &MemoryCommandEnvironment {
+                cwd: env.cwd.path().into(),
+                agent_home: env.home.path().into(),
+                settings,
+                code: Some(Arc::new(NoSnapshot)),
+                ..Default::default()
+            },
+        );
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        serde_json::from_str::<Value>(&output.stdout).unwrap()
+    };
+    let enabled = explain(true);
+    assert_eq!(enabled["retrieval_warnings"], json!([CODE_UNAVAILABLE]));
+    assert_eq!(enabled["requested_modes"]["code"], true);
+    assert_eq!(enabled["code_candidates"], json!([]));
+    assert_eq!(explain(false)["retrieval_warnings"], json!([]));
+}

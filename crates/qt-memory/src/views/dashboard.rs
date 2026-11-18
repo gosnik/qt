@@ -681,6 +681,10 @@ pub struct ContextBuildResult {
     /// One line per recalled memory with its score.
     pub memories: Vec<String>,
     pub code_candidates: usize,
+    /// One line per code candidate: path, owner id, fused score, the
+    /// retrievers that ranked it and whether it entered the pack (archived
+    /// dashboard `code_candidates` owner/score/selection/ranks).
+    pub code: Vec<String>,
 }
 
 /// Archived `/context/build`: validates the request, previews retrieval
@@ -767,6 +771,40 @@ pub fn build_context(runtime: &MemoryRuntime, input: &ContextBuild) -> Result<Co
             )
         })
         .collect();
+    let code = preview
+        .code
+        .iter()
+        .map(|candidate| {
+            let ranks: Vec<String> = candidate
+                .ranks
+                .iter()
+                .map(|rank| format!("{}#{}", rank.retriever, rank.rank))
+                .collect();
+            let mut line = format!(
+                "{}  {}  rrf={:.4}  ranks={}{}",
+                if candidate.owner.path.is_empty() {
+                    "(project)"
+                } else {
+                    &candidate.owner.path
+                },
+                candidate.owner.id,
+                candidate.fused_score,
+                ranks.join(","),
+                if pack.code_ids.contains(&candidate.owner.id) {
+                    " [in pack]"
+                } else {
+                    ""
+                }
+            );
+            if !candidate.eligible {
+                line += " [not eligible]";
+            }
+            for reason in &candidate.exclusion_reasons {
+                line += &format!(" excluded: {reason}");
+            }
+            line
+        })
+        .collect();
     Ok(ContextBuildResult {
         markdown: pack.markdown.clone(),
         memory_ids: pack.memory_ids.clone(),
@@ -779,6 +817,7 @@ pub fn build_context(runtime: &MemoryRuntime, input: &ContextBuild) -> Result<Co
         explanation,
         memories,
         code_candidates: preview.code.len(),
+        code,
     })
 }
 

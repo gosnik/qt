@@ -133,10 +133,10 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 
 - [x] SQLite store with migrations v1–v7 and triggers; domain model, scopes, governance transitions, audit.
 - [ ] CRUD with secret redaction; capture/ingestion worker with spool and dedup; post-processing.
-- [ ] Recall: lexical (FTS5 + hashed similarity), graph, dense (embeddings, indexer jobs), code; RRF fusion; explanations.
+- [ ] Recall: lexical (FTS5 + hashed similarity), graph, dense (embeddings, indexer jobs), code; RRF fusion; explanations (Code recall verified end to end 2026-11-18: persisted index snapshot, pinned FTS lexical provider, `code_bm25`/`code_graph` in CLI/RPC explain, dashboard and injected context.)
 - [ ] Context rendering envelope and placement; pre-handler child protocol.
 - [x] Review workflow (kinds, actions, batches, backup/restore, stats).
-- [ ] Dreaming, web research, auto_validate verifier.
+- [ ] Dreaming, web research, auto_validate verifier. (Full cycle verified with real Dream and verifier children on a local llama model and a stubbed research child; gap: the real research child has not been run against public web search/fetch.)
 - [x] Skill import, offline qtmem import, export/prune/scrub.
 - [ ] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions.
 - [x] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).

@@ -149,6 +149,12 @@ pub trait CodeSnapshotProvider: Send + Sync {
     /// The latest published snapshot, if any.
     fn snapshot(&self) -> Option<Arc<CodeSnapshot>>;
 
+    /// Why code retrieval is unavailable (no usable snapshot), reported as a
+    /// retrieval warning by `qt memory explain`.
+    fn unavailable_reason(&self) -> Option<String> {
+        None
+    }
+
     /// Lexical (BM25) matches for `query`, best first. The default matches
     /// symbol names exactly, ordered by node id.
     fn lexical(&self, query: &str, limit: usize) -> Vec<RetrievalReference> {
