@@ -24,62 +24,73 @@ TUI-only behaviour (terminal rendering, Kitty images, SIGWINCH, OSC progress, `/
 - [x] Desktop UI: sidebar, model/thinking pickers, streamed markdown, tool cards, diffs, keys dialog, themes.
 - [x] `qt-cli` print mode.
 
+## Integration (wave 1 libraries → runtime)
+
+Wave 1 (2026-11-18) delivered the libraries below as tested code; these wiring steps are what
+remain before the checked items are visible in the app and CLI.
+
+- [ ] Engine reads workspace policy, bash and web options, mutation policy and image resize from settings and passes them to tools.
+- [ ] Engine builds the system prompt from `resources::load_resources` (skills, SYSTEM.md, APPEND_SYSTEM.md, shellPath).
+- [ ] Composition root (`qt-runtime`) registers index tools + service, MCP manager + tools, llama provider, memory and extensions for app and CLI.
+- [ ] Pluggable provider backends in qt-core so `llama` (qt-llama) is dispatched by `provider::stream`.
+- [ ] Settings migration from milestone-1 `ollama` provider id to `ollama:local`.
+
 ## Milestone 2: Harness and sessions
 
-- [ ] Session entry types: model_change, thinking_level_change, session_info (name), label, branch_summary, compaction, custom_message, custom, bashExecution/custom message roles; v1/v2 → v3 migration; strict validation; stats (tokens, cost, per-model).
+- [x] Session entry types: model_change, thinking_level_change, session_info (name), label, branch_summary, compaction, custom_message, custom, bashExecution/custom message roles; v1/v2 → v3 migration; strict validation; stats (tokens, cost, per-model).
 - [ ] Tree: branch, branch_with_summary (model-backed), labels, get_tree, build context from any leaf; GUI tree view (`/tree`).
 - [ ] Fork (from a user message), clone, new, switch, import, missing-cwd prompt; `parentSession` header.
 - [ ] Session catalog: id-prefix resolution, `--session`, `--fork`, `--continue`, `--resume` (GUI picker), `--no-session`, `--session-dir` / `PI_CODING_AGENT_SESSION_DIR` / `sessionDir`.
-- [ ] Compaction: Pi summary prompts, cut point, split-turn prefix summary, iterative update, read/modified file tracking, `compaction` entry, replay injection; manual `/compact [instructions]`.
-- [ ] Auto-compaction on threshold *(unwired)* and overflow recovery (compact + retry once, Pi).
-- [ ] Context-overflow detection (phrase list + usage checks).
-- [ ] Auto-retry with exponential backoff for transient errors *(unwired)*; provider retry settings, Retry-After.
+- [x] Compaction: Pi summary prompts, cut point, split-turn prefix summary, iterative update, read/modified file tracking, `compaction` entry, replay injection; manual `/compact [instructions]`.
+- [x] Auto-compaction on threshold *(unwired)* and overflow recovery (compact + retry once, Pi).
+- [x] Context-overflow detection (phrase list + usage checks).
+- [x] Auto-retry with exponential backoff for transient errors *(unwired)*; provider retry settings, Retry-After.
 - [ ] Steering / follow-up / next-turn queues with `steeringMode` / `followUpMode`; queue events; Enter-while-running steers.
-- [ ] Parallel tool execution for non-destructive batches *(unwired)*.
-- [ ] Hooks pipeline: before_agent_start, context, model-context augmentor, before_provider_request/payload, after_provider_response, tool_call (block), tool_result (rewrite), before_compact, session lifecycle events.
+- [x] Parallel tool execution for non-destructive batches *(unwired)*.
+- [x] Hooks pipeline: before_agent_start, context, model-context augmentor, before_provider_request/payload, after_provider_response, tool_call (block), tool_result (rewrite), before_compact, session lifecycle events.
 - [ ] Save points / deferred runtime changes during a turn; active tool set persisted (`tools-config` entry).
 - [ ] Goals (`/goal`): objective, token/time accounting, continuation prompt.
 
 ## Milestone 3: Prompt resources
 
-- [ ] Skills: discovery roots, SKILL.md + root `*.md`, frontmatter, ignore files, collisions; `<available_skills>` prompt block; `/skill:<name>` (`enableSkillCommands`).
-- [ ] Prompt templates: roots, frontmatter, argument expansion (`$1`, `$@`, `$ARGUMENTS`, `${@:N:L}`, `{{args}}`), exposed as slash commands.
-- [ ] SYSTEM.md / APPEND_SYSTEM.md (project and agent home), `--system-prompt`, `--append-system-prompt`.
-- [ ] Runtime metadata section (shell, timezone, network, permissions), workspace-policy text.
+- [x] Skills: discovery roots, SKILL.md + root `*.md`, frontmatter, ignore files, collisions; `<available_skills>` prompt block; `/skill:<name>` (`enableSkillCommands`).
+- [x] Prompt templates: roots, frontmatter, argument expansion (`$1`, `$@`, `$ARGUMENTS`, `${@:N:L}`, `{{args}}`), exposed as slash commands.
+- [x] SYSTEM.md / APPEND_SYSTEM.md (project and agent home), `--system-prompt`, `--append-system-prompt`.
+- [x] Runtime metadata section (shell, timezone, network, permissions), workspace-policy text.
 - [ ] Themes: JSON theme files (51 tokens), discovery roots, live reload; mapped onto the GPUI theme.
 
 ## Milestone 4: Providers and models
 
-- [ ] OpenAI Responses API (reasoning replay, encrypted content, prompt cache key/retention, session headers).
-- [ ] openai-codex subscription (JWT account id, Codex endpoint and headers).
-- [ ] Azure OpenAI Responses.
-- [ ] Chat-completions compat matrix (store, developer role, max-tokens field, thinking formats, routing, provider hosts).
-- [ ] Anthropic extras: OAuth (Claude Pro/Max) headers and tool-name mapping, betas, adaptive thinking, 1h cache TTL.
+- [x] OpenAI Responses API (reasoning replay, encrypted content, prompt cache key/retention, session headers).
+- [x] openai-codex subscription (JWT account id, Codex endpoint and headers).
+- [x] Azure OpenAI Responses.
+- [x] Chat-completions compat matrix (store, developer role, max-tokens field, thinking formats, routing, provider hosts).
+- [x] Anthropic extras: OAuth (Claude Pro/Max) headers and tool-name mapping, betas, adaptive thinking, 1h cache TTL.
 - Out of scope (decision 2026-11-18): Google/Vertex, Bedrock, Mistral and the Copilot device flow were serializer-only or unwired in the shipped binary.
-- [ ] Built-in model catalog (providers, ~77 models, context/max tokens/pricing/thinking maps); `models.json` overrides incl. `!command` keys; cost calculation incl. service tiers; thinking levels minimal/xhigh with clamping.
-- [ ] OpenRouter extras: pricing/metadata, disk cache, credits; image-generation models.
+- [x] Built-in model catalog (providers, ~77 models, context/max tokens/pricing/thinking maps); `models.json` overrides incl. `!command` keys; cost calculation incl. service tiers; thinking levels minimal/xhigh with clamping.
+- [x] OpenRouter extras: pricing/metadata, disk cache, credits; image-generation models.
 - [ ] Auth: OAuth PKCE login with localhost callback (anthropic, openai-codex), token refresh *(gap in C++)*, `/login` `/logout` GUI, env-var table (~28 providers), legacy auth.json shapes, `--api-key`.
 - [ ] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
 - [ ] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`.
-- [ ] In-process llama.cpp via a `qt-llama-sys` crate building the PrismML fork submodule (needed for Q2_0): settings.llama (backend, context, generation, kvCache, grammar, embeddings, models), GPU offload planning, GGUF discovery and classification, `--discover-local-models`, tool-call parsing, embeddings, `/llama` panel.
+- [ ] In-process llama.cpp via a `qt-llama-sys` crate (library complete in `qt-llama`; needs provider dispatch, model picker, `--discover-local-models`, `/llama` panel) building the PrismML fork submodule (needed for Q2_0): settings.llama (backend, context, generation, kvCache, grammar, embeddings, models), GPU offload planning, GGUF discovery and classification, `--discover-local-models`, tool-call parsing, embeddings, `/llama` panel.
 
 ## Milestone 5: Tools
 
-- [ ] Workspace path policy: `workspaceRoot`, `allowExternalFilesystemAccess` (global only; project may narrow), applied to all path tools and bash cwd; prompt text.
-- [ ] Tool aliases and argument normalisation (`read_text`, `file_path`, `old_string`, …); `--tools` / `--no-tools` / `--no-builtin-tools`; `/tools` toggles; mutation approval queue.
-- [ ] Extras: read repeated-read guard and image resize; edit `replace_all` and NFKC fallback; grep `output_mode`, `head_limit`, `offset`, `multiline`, `type`, `hidden`, `no_ignore`; find `type`/`directories`; ls `recursive`/`depth`/`ignore`; bash `timeout_ms`, `workdir`, details fields, streaming.
-- [ ] New tools: append_text, apply_patch (Codex envelope), clipboard, complete_path, package_manager (plans only).
-- [ ] Web tools: web_fetch, web_search (DuckDuckGo), web_run (stateful batched browser); public-URL policy; `PI_OFFLINE` / `--offline`.
+- [x] Workspace path policy: `workspaceRoot`, `allowExternalFilesystemAccess` (global only; project may narrow), applied to all path tools and bash cwd; prompt text.
+- [x] Tool aliases and argument normalisation (`read_text`, `file_path`, `old_string`, …); `--tools` / `--no-tools` / `--no-builtin-tools`; `/tools` toggles; mutation approval queue.
+- [x] Extras: read repeated-read guard and image resize; edit `replace_all` and NFKC fallback; grep `output_mode`, `head_limit`, `offset`, `multiline`, `type`, `hidden`, `no_ignore`; find `type`/`directories`; ls `recursive`/`depth`/`ignore`; bash `timeout_ms`, `workdir`, details fields, streaming.
+- [x] New tools: append_text, apply_patch (Codex envelope), clipboard, complete_path, package_manager (plans only).
+- [x] Web tools: web_fetch, web_search (DuckDuckGo), web_run (stateful batched browser); public-URL policy; `PI_OFFLINE` / `--offline`.
 - [ ] `!cmd` / `!!cmd` user bash with session entries.
 - [ ] `@file` arguments and mentions (inline `<file>`, images), path autocomplete.
 
 ## Milestone 6: Project index
 
-- [ ] Background scanner (gitignore-aware, fingerprints, 30 s rescans), SQLite + FTS5 store under `agent_home/index/<hash>`.
-- [ ] Build metadata (CMake, Make, Ninja, qmake, waf, PlatformIO), compile_commands generation, include graph.
-- [ ] C/C++ code index (classes, methods, functions, call graph) and tree-sitter metadata.
-- [ ] Model tools: symbol, analyze_file, references, build_context, search_index, `index` router.
-- [ ] Router operation groups: core, code, fs, git, build. (Decision 2026-11-18: serial, debug, rtos, fetch and util groups are not ported.)
+- [x] Background scanner (gitignore-aware, fingerprints, 30 s rescans), SQLite + FTS5 store under `agent_home/index/<hash>`.
+- [x] Build metadata (CMake, Make, Ninja, qmake, waf, PlatformIO), compile_commands generation, include graph.
+- [x] C/C++ code index (classes, methods, functions, call graph) and tree-sitter metadata.
+- [x] Model tools: symbol, analyze_file, references, build_context, search_index, `index` router.
+- [x] Router operation groups: core, code, fs, git, build. (Decision 2026-11-18: serial, debug, rtos, fetch and util groups are not ported.)
 - [ ] `/index` panel.
 
 ## Milestone 7: Subagents and MCP
@@ -87,7 +98,7 @@ TUI-only behaviour (terminal rendering, Kitty images, SIGWINCH, OSC progress, `/
 - [ ] Agent definitions (frontmatter, built-in scout/planner/reviewer/worker, user/project scope, trust).
 - [ ] `subagent` tool: single, parallel, chain; child `qt-cli --mode json` processes; depth limits.
 - [ ] Persistent workers: spawn/send/follow_up/wait/interrupt/list, storage, mailbox, completion events, restart recovery, fork snapshots.
-- [ ] MCP client: config files and merge order, stdio / streamable-http / sse, sampling, proxy tools `mcp_<server>_<tool>`, resource tools, stderr log; `/mcp` panel.
+- [x] MCP client: config files and merge order, stdio / streamable-http / sse, sampling, proxy tools `mcp_<server>_<tool>`, resource tools, stderr log; `/mcp` panel.
 
 ## Milestone 8: Modes and CLI
 
@@ -115,13 +126,13 @@ TUI-only behaviour (terminal rendering, Kitty images, SIGWINCH, OSC progress, `/
 
 ## Milestone 11: Governed memory
 
-- [ ] SQLite store with migrations v1–v7 and triggers; domain model, scopes, governance transitions, audit.
+- [x] SQLite store with migrations v1–v7 and triggers; domain model, scopes, governance transitions, audit.
 - [ ] CRUD with secret redaction; capture/ingestion worker with spool and dedup; post-processing.
 - [ ] Recall: lexical (FTS5 + hashed similarity), graph, dense (embeddings, indexer jobs), code; RRF fusion; explanations.
 - [ ] Context rendering envelope and placement; pre-handler child protocol.
-- [ ] Review workflow (kinds, actions, batches, backup/restore, stats).
+- [x] Review workflow (kinds, actions, batches, backup/restore, stats).
 - [ ] Dreaming, web research, auto_validate verifier.
-- [ ] Skill import, offline qtmem import, export/prune/scrub.
+- [x] Skill import, offline qtmem import, export/prune/scrub.
 - [ ] Memory tools, `/memory` panel incl. review inbox, settings, `qt memory` CLI, RPC actions.
 - [ ] Dashboard as a native GPUI window (replaces the ImGui/WASM browser dashboard).
 
