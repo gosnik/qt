@@ -945,10 +945,16 @@ The archived `runtime_services.cpp`, `cli.cpp`, `cli_startup.cpp`, `print_json_m
     positional that is an existing directory written as a path (`.`, `..`, absolute or
     containing `/`) opens that project instead (a bare word is always a message).
     Messages, `@file` arguments and piped stdin form the initial prompt (archived
-    `prepare_initial_message`), sent when the window opens with the `input` hooks and
-    template / skill expansion; further messages are queued as follow-ups (Pi interactive
-    `initialMessages`; the archived interactive mode dropped them). Built-in and extension
-    slash commands are not run from the command line. The archive switched to print mode
+    `prepare_initial_message`); when the window opens it and each further message go
+    through the composer's submission path in order, as if typed (archived
+    `submit_line(initial_message)`): `/command` runs the slash command (built-in,
+    extension, template or skill), `!cmd` / `!!cmd` runs user bash, other text prompts with
+    the `input` hooks and `@` mentions, and each line is added to the prompt history. A
+    plain message given while the agent runs is queued as a follow-up (Pi interactive
+    `initialMessages`; the archived interactive mode dropped the extra messages); a command
+    or `!` line waits until the run or user bash before it ends, so effects land in the
+    given order. Aborting a run returns the unsent messages to the composer with the
+    queued follow-ups. A first message carrying `@file` images is always a prompt. The archive switched to print mode
     whenever stdin was not a terminal; `qt` reads stdin only when it is a pipe or a regular
     file and prepends non-empty input to the window's first prompt (use `qt-cli` for a
     headless run). `--resume` with an initial message, and an initial message for a

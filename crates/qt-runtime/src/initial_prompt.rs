@@ -1,19 +1,14 @@
 //! The first prompt of an interactive session, from the command line
 //! (archived `prepare_initial_message`): piped stdin, then the `@file`
 //! blocks, then the first message form the initial prompt; the other
-//! messages follow one by one (Pi's interactive `initialMessages`).
+//! messages follow one by one (Pi's interactive `initialMessages`). The
+//! desktop app submits each line through its composer path (`!command`,
+//! `/command`, prompt), like archived `submit_line(initial_message)`.
 
 use std::path::Path;
 
-use anyhow::Result;
-use async_channel::Receiver;
-
-use qt_core::agent::AgentEvent;
-use qt_core::engine::{Conversation, Engine};
-use qt_core::harness::hooks::{InputOutcome, InputSource};
 use qt_core::input::{DiagnosticSeverity, FileDiagnostic};
 use qt_core::message::ContentBlock;
-use qt_core::slash::{SlashCommandSource, parse_invocation};
 
 /// The prompt a window opens with.
 #[derive(Debug, Clone, Default)]
@@ -29,6 +24,17 @@ pub struct InitialPrompt {
 impl InitialPrompt {
     pub fn is_empty(&self) -> bool {
         self.text.is_empty() && self.images.is_empty() && self.follow_ups.is_empty()
+    }
+
+    /// The lines to submit, in order: the initial prompt (with the `@file`
+    /// images), then each follow-up message.
+    pub fn into_lines(self) -> Vec<(String, Vec<ContentBlock>)> {
+        let mut lines = Vec::with_capacity(self.follow_ups.len() + 1);
+        if !self.text.is_empty() || !self.images.is_empty() {
+            lines.push((self.text, self.images));
+        }
+        lines.extend(self.follow_ups.into_iter().map(|m| (m, Vec::new())));
+        lines
     }
 }
 
@@ -69,62 +75,6 @@ pub fn prepare_initial_prompt(
     Ok((prompt, files.diagnostics))
 }
 
-/// Expand `/template args` and `/skill:name args` (Pi `_expandSkillCommand`
-/// + `expandPromptTemplate`); other text is kept.
-pub fn expand_prompt(engine: &Engine, text: &str) -> String {
-    if !text.starts_with('/') {
-        return text.to_string();
-    }
-    let Ok(invocation) = parse_invocation(text) else {
-        return text.to_string();
-    };
-    let registry = engine.slash_commands();
-    match registry.find(&invocation.name) {
-        Some(command)
-            if matches!(
-                command.source,
-                SlashCommandSource::Prompt | SlashCommandSource::Skill
-            ) =>
-        {
-            registry
-                .expand(command, &invocation.arguments)
-                .unwrap_or_else(|| text.to_string())
-        }
-        _ => text.to_string(),
-    }
-}
-
-/// Send `prompt` in `conversation` as typed input: the extension `input`
-/// hooks run first (source `interactive`), then template / skill expansion;
-/// the follow-up messages are queued behind it. `Ok(None)` when an input
-/// hook handled the prompt.
-pub fn submit_initial_prompt(
-    conversation: &Conversation,
-    prompt: InitialPrompt,
-) -> Result<Option<Receiver<AgentEvent>>> {
-    let engine = conversation.engine();
-    let mut rx = None;
-    if (!prompt.text.is_empty() || !prompt.images.is_empty())
-        && let InputOutcome::Continue { text, images } =
-            engine.process_input(&prompt.text, prompt.images, InputSource::Interactive)?
-    {
-        let text = expand_prompt(engine, &text);
-        rx = Some(conversation.prompt(&text, images)?);
-    }
-    for message in prompt.follow_ups {
-        let text = match engine.process_input(&message, Vec::new(), InputSource::Interactive)? {
-            InputOutcome::Continue { text, .. } => expand_prompt(engine, &text),
-            InputOutcome::Handled => continue,
-        };
-        if rx.is_none() {
-            rx = Some(conversation.prompt(&text, Vec::new())?);
-        } else {
-            conversation.follow_up(&text, Vec::new())?;
-        }
-    }
-    Ok(rx)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +107,21 @@ mod tests {
         let err =
             prepare_initial_prompt(&[], &s(&["missing.txt"]), None, dir.path(), false).unwrap_err();
         assert!(err.contains("missing.txt"), "{err}");
+    }
+
+    #[test]
+    fn lines_keep_command_messages_verbatim_and_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (p, _) = prepare_initial_prompt(
+            &s(&["/model ollama:qwen3.5:9b", "hello", "/goal ship"]),
+            &[],
+            None,
+            dir.path(),
+            false,
+        )
+        .unwrap();
+        let lines: Vec<String> = p.into_lines().into_iter().map(|(t, _)| t).collect();
+        assert_eq!(lines, ["/model ollama:qwen3.5:9b", "hello", "/goal ship"]);
+        assert!(InitialPrompt::default().into_lines().is_empty());
     }
 }

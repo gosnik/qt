@@ -27,12 +27,10 @@ mod workspace;
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use qt_core::logging::{LoggingOptions, init_logging};
 use qt_runtime::cli_args::{self, Severity};
-use qt_runtime::initial_prompt::{InitialPrompt, prepare_initial_prompt, submit_initial_prompt};
+use qt_runtime::initial_prompt::prepare_initial_prompt;
 use qt_runtime::{RunMode, Runtime};
 
 use crate::workspace::Workspace;
@@ -181,8 +179,10 @@ fn main() -> Result<()> {
                     let workspace = Workspace::new(engine, window, cx);
                     cx.defer_in(window, move |this: &mut Workspace, window, cx| {
                         this.apply_startup(startup, window, cx);
+                        // Command-line messages run like typed composer
+                        // lines (slash commands, `!` commands, prompts).
                         if let Some(prompt) = initial {
-                            send_initial_prompt(prompt, window, cx);
+                            this.submit_startup_lines(prompt.into_lines(), window, cx);
                         }
                     });
                     workspace
@@ -208,20 +208,4 @@ fn main() -> Result<()> {
             cx.activate(true);
         });
     Ok(())
-}
-
-/// Send the command line's initial prompt in the window's conversation; its
-/// run is shown like a run an extension started.
-fn send_initial_prompt(prompt: InitialPrompt, window: &mut Window, cx: &mut Context<Workspace>) {
-    let runtime = cx.global::<RuntimeGlobal>().0.clone();
-    let Some(conversation) = runtime.active_conversation() else {
-        return;
-    };
-    match submit_initial_prompt(&conversation, prompt) {
-        Ok(Some(events)) => {
-            runtime.deliver_run(events);
-        }
-        Ok(None) => {}
-        Err(err) => window.push_notification(Notification::error(format!("{err:#}")), cx),
-    }
 }
