@@ -9,6 +9,8 @@ edition = "2024"
 
 [workspace.dependencies]
 qt-core = { path = "crates/qt-core" }
+qt-llama-sys = { path = "crates/qt-llama-sys" }
+qt-llama = { path = "crates/qt-llama" }
 
 anyhow = "1"
 async-channel = "2"
@@ -36,6 +38,9 @@ unicode-normalization = "0.1"
 url = "2"
 
 gpui-kit = "0.10.0"
+
+# Build-time only (qt-llama-sys)
+bindgen = "0.72"
 
 [profile.release]
 lto = "thin"
