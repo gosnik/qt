@@ -117,6 +117,11 @@ pub trait Tool: Send + Sync {
     /// JSON schema of the arguments.
     fn parameters(&self) -> Value;
     fn execute(&self, args: Value, ctx: ToolContext) -> BoxFuture<'static, ToolOutput>;
+    /// Whether calls may run concurrently with other parallel-safe calls in
+    /// the same batch (read-only tools without side effects).
+    fn parallel_safe(&self) -> bool {
+        false
+    }
 
     fn spec(&self) -> ToolSpec {
         ToolSpec {
