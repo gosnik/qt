@@ -258,6 +258,62 @@ pub fn configured_providers(settings: &Settings, auth: &AuthStore) -> Vec<Provid
     let home = settings.home().cloned().unwrap_or_else(AgentHome::from_env);
     let (catalog, by_provider, _) = cached_catalog(&home, settings);
     let retry = RetryPolicy::from_settings(settings);
+    let mut providers = catalog_providers(&catalog, &by_provider, settings, auth);
+    let mut instances = settings.ollama_settings();
+    if instances.is_empty() {
+        instances.push(crate::ollama::OllamaInstance::local_default());
+    }
+    for instance in instances.iter().filter(|i| i.enabled) {
+        let id = crate::ollama::provider_id(&instance.id);
+        providers.push(ProviderConfig {
+            label: instance.label(),
+            kind: ProviderKind::OpenAiCompletions,
+            base_url: format!("{}/v1", instance.base_url),
+            api_key: instance.api_key.clone(),
+            compat: crate::ollama::compat(),
+            local: true,
+            models: by_provider
+                .get(&id.to_lowercase())
+                .cloned()
+                .unwrap_or_default(),
+            retry: RetryPolicy {
+                timeout_ms: instance.timeout_ms,
+                ..retry
+            },
+            id,
+            ..ProviderConfig::default()
+        });
+    }
+    providers
+}
+
+/// Provider configs for every usable provider of `catalog` (not Ollama
+/// instances), with credentials from `auth`, the environment or the
+/// catalog. Used for catalogs extended at runtime (extension providers).
+pub fn catalog_provider_configs(
+    catalog: &ModelCatalog,
+    settings: &Settings,
+    auth: &AuthStore,
+) -> Vec<ProviderConfig> {
+    let mut grouped: HashMap<String, Vec<ModelSpec>> = HashMap::new();
+    for model in &catalog.models {
+        grouped
+            .entry(model.provider.to_lowercase())
+            .or_default()
+            .push(model.clone());
+    }
+    let by_provider: ModelsByProvider =
+        grouped.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
+    catalog_providers(catalog, &by_provider, settings, auth)
+}
+
+fn catalog_providers(
+    catalog: &ModelCatalog,
+    by_provider: &ModelsByProvider,
+    settings: &Settings,
+    auth: &AuthStore,
+) -> Vec<ProviderConfig> {
+    let retry = RetryPolicy::from_settings(settings);
     let auth_path = auth.path().map(PathBuf::from);
     let telemetry = ["telemetryEnabled", "enableInstallTelemetry"]
         .iter()
@@ -312,31 +368,6 @@ pub fn configured_providers(settings: &Settings, auth: &AuthStore) -> Vec<Provid
             }
         }
         providers.push(config);
-    }
-    let mut instances = settings.ollama_settings();
-    if instances.is_empty() {
-        instances.push(crate::ollama::OllamaInstance::local_default());
-    }
-    for instance in instances.iter().filter(|i| i.enabled) {
-        let id = crate::ollama::provider_id(&instance.id);
-        providers.push(ProviderConfig {
-            label: instance.label(),
-            kind: ProviderKind::OpenAiCompletions,
-            base_url: format!("{}/v1", instance.base_url),
-            api_key: instance.api_key.clone(),
-            compat: crate::ollama::compat(),
-            local: true,
-            models: by_provider
-                .get(&id.to_lowercase())
-                .cloned()
-                .unwrap_or_default(),
-            retry: RetryPolicy {
-                timeout_ms: instance.timeout_ms,
-                ..retry
-            },
-            id,
-            ..ProviderConfig::default()
-        });
     }
     providers
 }

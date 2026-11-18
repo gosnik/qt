@@ -303,6 +303,16 @@ impl AuthStore {
             .insert("apiKey".into(), json!(key.trim()));
     }
 
+    /// Use `key` for `provider` without marking it for saving (`--api-key`):
+    /// [`Self::save`] keeps the file's entry for this provider.
+    pub fn set_transient_api_key(&mut self, provider: &str, key: &str) {
+        let was_dirty = self.dirty.contains(provider);
+        self.set_api_key(provider, key);
+        if !was_dirty {
+            self.dirty.remove(provider);
+        }
+    }
+
     /// Remove the stored API key (an OAuth login is kept).
     pub fn remove_api_key(&mut self, provider: &str) {
         self.dirty.insert(provider.to_string());

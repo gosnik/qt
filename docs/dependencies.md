@@ -96,6 +96,16 @@ No crates beyond the lists above: `qt-core`, `tokio`, `tokio-util`, `futures`,
 `async-channel`, `serde_json`, `chrono`, `rand`, `libc` (unix, process-group kill) and
 `tempfile` (dev). The worker index lock uses `std::fs::File::try_lock`.
 
+## Composition root and CLI (`qt-runtime`, `qt-cli`)
+
+No external crates beyond the lists above. `qt-runtime` combines the workspace crates
+(`qt-core`, `qt-llama`, `qt-index`, `qt-mcp`, `qt-memory`, `qt-extensions`, `qt-subagents`,
+now also listed in `[workspace.dependencies]` as path dependencies) with `anyhow`,
+`async-channel`, `futures`, `serde_json`, `tokio`, `tokio-util`, `tracing` and `tempfile`
+(dev). `qt-cli` adds `qt-runtime` and uses `rusqlite` (dev, to inspect the memory store in
+its end-to-end tests). `qt-llama` now also uses `anyhow` and `futures` for its
+`ProviderBackend` implementation.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including

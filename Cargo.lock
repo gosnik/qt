@@ -4965,6 +4965,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "qt-core",
+ "qt-runtime",
  "reqwest",
  "serde_json",
  "tempfile",
@@ -4975,9 +4976,18 @@ dependencies = [
 name = "qt-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "async-channel",
  "qt-core",
+ "qt-extensions",
+ "qt-index",
+ "qt-llama",
+ "qt-memory",
+ "qt-runtime",
+ "qt-subagents",
+ "rusqlite",
  "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -5048,7 +5058,9 @@ dependencies = [
 name = "qt-llama"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dirs 6.0.0",
+ "futures",
  "qt-core",
  "qt-llama-sys",
  "regex",
@@ -5096,6 +5108,27 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "qt-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "futures",
+ "qt-core",
+ "qt-extensions",
+ "qt-index",
+ "qt-llama",
+ "qt-mcp",
+ "qt-memory",
+ "qt-subagents",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

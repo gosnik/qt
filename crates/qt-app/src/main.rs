@@ -17,9 +17,15 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use gpui_kit::*;
-use qt_core::{AgentHome, Engine};
+use qt_runtime::{Runtime, RuntimeOptions};
 
 use crate::workspace::Workspace;
+
+/// The composition root's runtime (index, MCP, memory, extensions,
+/// subagents, llama.cpp), reachable from any view through the app context.
+pub struct RuntimeGlobal(pub Runtime);
+
+impl Global for RuntimeGlobal {}
 
 const USAGE: &str = "Usage: qt [--cwd <dir> | <dir>]\n\nOpens the qt desktop app for a project directory (default: current directory).\nUse qt-cli for headless runs.\n";
 
@@ -53,7 +59,12 @@ fn main() -> Result<()> {
     let Some(cwd) = parse_cwd()? else {
         return Ok(());
     };
-    let engine = Engine::new(AgentHome::from_env(), cwd)?;
+    let runtime = Runtime::build(RuntimeOptions::interactive(cwd))?;
+    for diagnostic in runtime.diagnostics() {
+        eprintln!("qt: {diagnostic}");
+    }
+    runtime.start_background_services();
+    let engine = runtime.engine().clone();
     let project = engine
         .cwd()
         .file_name()
@@ -64,6 +75,7 @@ fn main() -> Result<()> {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            cx.set_global(RuntimeGlobal(runtime.clone()));
             workspace::bind_keys(cx);
             theme::init(&engine, cx);
             let bounds = Bounds::centered(None, size(px(1240.), px(860.)), cx);

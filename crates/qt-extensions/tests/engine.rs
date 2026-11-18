@@ -207,3 +207,89 @@ fn hooks_and_host_calls_against_a_real_conversation() {
     assert!(Path::new(&home).exists());
     ext.uninstall_hooks();
 }
+
+const REWRITE: &str = r#"
+fn activate() {
+    on("tool_call", "on_tool_call");
+    on("message_end", "on_message_end");
+    on("input", "on_input");
+}
+
+fn on_tool_call(event) {
+    if event.toolName == "read" { #{ input: #{ path: "rewritten.txt" } } }
+}
+
+fn on_message_end(event) {
+    let m = event.message;
+    if m.role == "assistant" { m.content = [#{ type: "text", text: "redacted" }]; #{ message: m } }
+}
+
+fn on_input(event) {
+    if event.text == "/secret" { return #{ action: "handled" }; }
+    #{ action: "transform", text: event.text + "!" }
+}
+"#;
+
+#[test]
+fn hooks_rewrite_tool_input_messages_and_input() {
+    use qt_core::harness::Hooks;
+    use qt_core::harness::hooks::{InputOutcome, InputSource, ToolCallEvent, ToolCallOutcome};
+    use qt_core::message::{AgentMessage, AssistantMessage, ContentBlock, Message};
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("rewrite.rhai");
+    std::fs::write(&script, REWRITE).unwrap();
+    let loaded = load_extension_roots(
+        &[display_path(&script)],
+        &[],
+        &ExtensionOrigin::Cli,
+        SandboxPolicy::default(),
+    );
+    assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    let ext = Extensions::from_result(DiscoveryOptions::default(), loaded);
+    let hooks = Hooks::new();
+    ext.install_hooks(&hooks);
+
+    let call = |name: &str| ToolCallEvent {
+        turn_index: 0,
+        tool_call_id: "1".into(),
+        tool_name: name.into(),
+        args: json!({"path": "a.txt"}),
+    };
+    assert_eq!(
+        hooks.run_tool_call_chain(&call("read")),
+        ToolCallOutcome::Run(json!({"path": "rewritten.txt"}))
+    );
+    assert_eq!(
+        hooks.run_tool_call_chain(&call("ls")),
+        ToolCallOutcome::Run(json!({"path": "a.txt"}))
+    );
+
+    let replaced = hooks.run_message_end(AgentMessage::Llm(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::text("secret")],
+        ..Default::default()
+    })));
+    assert_eq!(
+        replaced.as_assistant().unwrap().content,
+        vec![ContentBlock::text("redacted")]
+    );
+    let user = AgentMessage::Llm(Message::user_text("hi"));
+    assert_eq!(hooks.run_message_end(user.clone()), user);
+
+    assert_eq!(
+        hooks.run_input("hello", vec![], InputSource::Interactive),
+        Ok(InputOutcome::Continue {
+            text: "hello!".into(),
+            images: vec![]
+        })
+    );
+    assert_eq!(
+        hooks.run_input("/secret", vec![], InputSource::Rpc),
+        Ok(InputOutcome::Handled)
+    );
+    ext.uninstall_hooks();
+    assert_eq!(
+        hooks.run_tool_call_chain(&call("read")),
+        ToolCallOutcome::Run(json!({"path": "a.txt"}))
+    );
+}

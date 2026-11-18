@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::harness::compaction::CompactionResult;
 use crate::harness::hooks::{
-    CompactionReason, Hooks, ProviderResponseEvent, ToolCallEvent, ToolResultEvent,
+    CompactionReason, Hooks, ProviderResponseEvent, ToolCallEvent, ToolCallOutcome, ToolResultEvent,
 };
 use crate::message::{
     AgentMessage, AssistantMessage, Message, StopReason, ToolResultMessage, Usage, convert_to_llm,
@@ -176,8 +176,16 @@ pub async fn run_loop(
     cb: &mut LoopCallbacks<'_>,
 ) -> LoopOutcome {
     let mut outcome = LoopOutcome::default();
+    let hooks = params.hooks.clone();
+    // Assistant messages are finalized (and `message_end`-replaced) before
+    // their tool calls are read; every other message is replaced here.
     let append =
         |context: &mut Vec<AgentMessage>, message: AgentMessage, cb: &mut LoopCallbacks<'_>| {
+            let message = if hooks.has_message_end() && message.as_assistant().is_none() {
+                hooks.run_message_end(message)
+            } else {
+                message
+            };
             if let Err(err) = (cb.record)(&message) {
                 emit.emit(AgentEvent::Warning(format!(
                     "Could not save session: {err}"
@@ -200,7 +208,15 @@ pub async fn run_loop(
             for message in std::mem::take(&mut pending) {
                 append(&mut context, message, cb);
             }
-            let assistant = stream_response(&params, &context, outcome.turns, cancel, emit).await;
+            let mut assistant =
+                stream_response(&params, &context, outcome.turns, cancel, emit).await;
+            if hooks.has_message_end()
+                && let Some(replaced) = hooks
+                    .run_message_end(AgentMessage::Llm(Message::Assistant(assistant.clone())))
+                    .as_assistant()
+            {
+                assistant = replaced.clone();
+            }
             let turn_message = assistant.clone();
             outcome.usage.add(&assistant.usage);
             let stop = assistant.stop_reason;
@@ -278,9 +294,29 @@ async fn stream_response(
         thinking: params.thinking,
         ..Default::default()
     };
-    let request = params
-        .hooks
-        .run_model_context(&model, request, turn, cancel);
+    // Augmentors (memory recall, which may run an isolated child agent) are
+    // synchronous and can take seconds, so they run on a blocking thread
+    // instead of an async worker.
+    let request = if params.hooks.has_model_context() {
+        let hooks = params.hooks.clone();
+        let hook_model = model.clone();
+        let hook_cancel = cancel.clone();
+        tokio::task::spawn_blocking(move || {
+            hooks.run_model_context(&hook_model, request, turn, &hook_cancel)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("model context augmentor failed: {e}")))
+    } else {
+        Ok(request)
+    };
+    let request = match request {
+        Ok(request) => request,
+        Err(error) => {
+            emit.emit(AgentEvent::AssistantStart);
+            return provider::PartialMessage::new(&params.provider, &params.model)
+                .finish_error(error);
+        }
+    };
     let request = params
         .hooks
         .run_before_provider_request(&model, request, turn);
@@ -384,25 +420,25 @@ async fn execute_tools(
     sink: &mut (dyn FnMut(ToolResultMessage) + Send),
 ) {
     let mut prepared = Vec::with_capacity(calls.len());
-    for (id, name, args) in calls {
+    for (id, name, mut args) in calls {
         let tool = params.tools.get(&name);
         let immediate = if tool.is_none() {
             Some(ToolOutput::error(format!("Tool {name} not found")))
         } else {
-            params
-                .hooks
-                .run_tool_call(&ToolCallEvent {
-                    turn_index: turn,
-                    tool_call_id: id.clone(),
-                    tool_name: name.clone(),
-                    args: args.clone(),
-                })
-                .map(|d| {
-                    ToolOutput::error(
-                        d.reason
-                            .unwrap_or_else(|| "Tool execution was blocked".into()),
-                    )
-                })
+            match params.hooks.run_tool_call_chain(&ToolCallEvent {
+                turn_index: turn,
+                tool_call_id: id.clone(),
+                tool_name: name.clone(),
+                args: args.clone(),
+            }) {
+                ToolCallOutcome::Run(rewritten) => {
+                    args = rewritten;
+                    None
+                }
+                ToolCallOutcome::Blocked(reason) => Some(ToolOutput::error(
+                    reason.unwrap_or_else(|| "Tool execution was blocked".into()),
+                )),
+            }
         };
         prepared.push(PreparedCall {
             id,
@@ -704,6 +740,7 @@ mod tests {
         let hooks = Hooks::new();
         hooks.add_tool_call(Arc::new(|e: &ToolCallEvent| {
             (e.tool_name == "blocked").then_some(ToolCallDecision {
+                args: None,
                 block: true,
                 reason: None,
             })
@@ -759,6 +796,61 @@ mod tests {
                 .iter()
                 .any(|m| m.user_text().as_deref() == Some("augmented"))
         );
+    }
+
+    #[tokio::test]
+    async fn hooks_rewrite_arguments_and_messages_and_can_fail_closed() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(1));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let tools = ToolRegistry::empty().with(tool("seq", &barrier, false, &log));
+        let hooks = Hooks::new();
+        hooks.add_tool_call(Arc::new(|_e: &ToolCallEvent| {
+            Some(ToolCallDecision {
+                args: Some(json!({"n": 5})),
+                ..Default::default()
+            })
+        }));
+        hooks.add_message_end(Arc::new(|m: &AgentMessage| {
+            let a = m.as_assistant()?;
+            if a.tool_calls().next().is_some() {
+                return None;
+            }
+            let mut a = a.clone();
+            a.content = vec![ContentBlock::text("replaced by hook")];
+            Some(AgentMessage::Llm(Message::Assistant(a)))
+        }));
+        let (port, _requests) = test_server::serve(vec![
+            test_server::tool_calls(&[("1", "seq", json!({"n": 1}))]),
+            test_server::text("original"),
+        ])
+        .await;
+        let h = Harness::default();
+        let (outcome, _) = h.run(params(port, tools, hooks.clone()), "go").await;
+        assert_eq!(h.results(), ["seq:5"]);
+        let last = outcome.last_assistant.unwrap();
+        assert_eq!(last.content, vec![ContentBlock::text("replaced by hook")]);
+        assert!(h.recorded.lock().unwrap().iter().any(|m| {
+            m.as_assistant()
+                .is_some_and(|a| a.content == vec![ContentBlock::text("replaced by hook")])
+        }));
+
+        // A failing augmentor aborts the request before it is sent.
+        let hooks = Hooks::new();
+        hooks.add_fallible_model_context_augmentor(Arc::new(|_e: &ModelContextEvent| {
+            Err("memory recall failed: store locked".into())
+        }));
+        let (port, requests) = test_server::serve(vec![test_server::text("unused")]).await;
+        let h = Harness::default();
+        let (outcome, _) = h
+            .run(params(port, ToolRegistry::empty(), hooks), "go")
+            .await;
+        let last = outcome.last_assistant.unwrap();
+        assert_eq!(last.stop_reason, StopReason::Error);
+        assert_eq!(
+            last.error_message.as_deref(),
+            Some("memory recall failed: store locked")
+        );
+        assert!(requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
