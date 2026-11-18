@@ -5,15 +5,18 @@
 //! command. Every function here may block on the llama worker thread, so
 //! front ends call them off their UI thread.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-use qt_core::message::Message;
-use qt_core::provider::{ModelRef, Request};
+use qt_core::message::{AssistantMessage, ContentBlock, Message, StopReason, ToolResultMessage};
+use qt_core::provider::{ModelRef, Request, ToolSpec};
+use qt_core::tools::{ToolRegistry, canonical_tool_name};
 use qt_llama::discovery::default_roots;
+use qt_llama::prompt::{ParsedToolCall, dump, parse_tool_call};
 use qt_llama::provider::make_generate_request;
 use qt_llama::{
-    DiscoveredModel, EmbeddingRequest, GenerateOptions, InstanceTag, KvCacheOperation,
-    KvCacheState, LlamaRuntime, LlamaSettings, PROVIDER_ID, RuntimeStatus,
+    DiscoveredModel, EmbeddingRequest, InstanceTag, KvCacheOperation, KvCacheState, LlamaRuntime,
+    LlamaSettings, PROVIDER_ID, RuntimeStatus,
 };
 use serde_json::{Map, Value, json};
 
@@ -54,8 +57,8 @@ pub const LLAMA_SUBCOMMANDS: &[(&str, &str, &str)] = &[
     ),
     (
         "grammar",
-        "<show|list|default|off> ...",
-        "Show, list, disable, or select the default grammar.",
+        "<show|off|inline|file|list|default> ...",
+        "Show, disable, or set grammar-constrained generation.",
     ),
     (
         "kv",
@@ -483,7 +486,8 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-/// Parse `key=value` GPU settings into `settings.llama.backend` keys.
+/// Parse `key=value` GPU settings into `settings.llama.backend` keys
+/// (archived keys and error messages).
 pub fn parse_gpu(arguments: &str) -> Result<Map<String, Value>, String> {
     let usage = "Usage: /llama gpu [gpuLayers=<n>] [mainGpu=<n>] [splitMode=<none|layer|row>] [offloadKqv=<bool>]";
     let mut out = Map::new();
@@ -493,11 +497,29 @@ pub fn parse_gpu(arguments: &str) -> Result<Map<String, Value>, String> {
             .filter(|(k, v)| !k.is_empty() && !v.is_empty())
             .ok_or(usage)?;
         let parsed = match key {
-            "gpuLayers" => json!(value.parse::<i32>().map_err(|_| usage)?),
-            "mainGpu" => json!(value.parse::<i32>().ok().filter(|v| *v >= 0).ok_or(usage)?),
-            "splitMode" if matches!(value, "none" | "layer" | "row") => json!(value),
-            "offloadKqv" => json!(parse_bool(value).ok_or(usage)?),
-            _ => return Err(usage.into()),
+            "gpuLayers" => json!(
+                value
+                    .parse::<i32>()
+                    .map_err(|_| "gpuLayers must be an integer".to_string())?
+            ),
+            "mainGpu" => json!(
+                value
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|v| *v >= 0)
+                    .ok_or("mainGpu must be an integer >= 0")?
+            ),
+            "splitMode" => {
+                let normalized = value.to_ascii_lowercase();
+                if !matches!(normalized.as_str(), "none" | "layer" | "row") {
+                    return Err("splitMode must be one of: none, layer, row".into());
+                }
+                json!(normalized)
+            }
+            "offloadKqv" | "useMmap" | "useMlock" => {
+                json!(parse_bool(value).ok_or_else(|| format!("{key} must be a boolean"))?)
+            }
+            _ => return Err(format!("Unsupported llama GPU setting: {key}")),
         };
         out.insert(key.to_string(), parsed);
     }
@@ -542,6 +564,326 @@ pub fn embedding_lines(header: &[&str], embedding: &[f32], input_tokens: u64) ->
         if embedding.len() > 3 { ", ...]" } else { "]" }
     ));
     lines
+}
+
+/// Expand a leading `~` with `$HOME` (archived `expand_home_path`).
+fn expand_home(path: &str) -> PathBuf {
+    if (path == "~" || path.starts_with("~/"))
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let mut out = PathBuf::from(home);
+        if path.len() > 2 {
+            out.push(&path[2..]);
+        }
+        return out;
+    }
+    PathBuf::from(path)
+}
+
+/// Archived `resolve_safe_llama_grammar_path`: `~` expansion, relative to
+/// `cwd`, symlinks resolved, and the result must lie under `cwd`, the
+/// workspace root, the agent home or `<process cwd>/lib/llama.cpp/grammars`.
+pub fn resolve_safe_grammar_path(
+    raw: &str,
+    cwd: &Path,
+    workspace_root: Option<&Path>,
+    agent_home: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let mut candidate = expand_home(raw);
+    if candidate.is_relative() {
+        candidate = cwd.join(candidate);
+    }
+    let resolved = qt_core::policy::weakly_canonical(&candidate);
+    let mut roots: Vec<PathBuf> = vec![cwd.to_path_buf()];
+    roots.extend(workspace_root.map(Path::to_path_buf));
+    roots.extend(agent_home.map(Path::to_path_buf));
+    if let Ok(process_cwd) = std::env::current_dir() {
+        roots.push(process_cwd.join("lib").join("llama.cpp").join("grammars"));
+    }
+    if roots
+        .iter()
+        .map(|root| qt_core::policy::weakly_canonical(root))
+        .any(|root| resolved.starts_with(&root))
+    {
+        return Ok(resolved);
+    }
+    Err(
+        "llama grammar path must be under cwd, workspace root, agent home, or lib/llama.cpp/grammars"
+            .into(),
+    )
+}
+
+/// Split `<path> [root]`, honouring a quoted path (archived
+/// `parse_optional_path_argument`).
+fn split_path_argument(text: &str) -> (String, &str) {
+    let text = text.trim();
+    let Some(quote) = text.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+        let (path, rest) = split_first(text);
+        return (path.to_string(), rest);
+    };
+    let body = &text[1..];
+    match body.find(quote) {
+        Some(end) => (body[..end].to_string(), body[end + 1..].trim()),
+        None => (body.to_string(), ""),
+    }
+}
+
+/// The `runtime_override:` value (archived compact JSON, `null` when unset).
+pub fn grammar_override_text(grammar: Option<&Value>) -> String {
+    grammar.map(dump).unwrap_or_else(|| "null".into())
+}
+
+/// The archived transcript truncation (`\n[truncated]` past `max` bytes).
+fn truncate_transcript(mut text: String, max: usize) -> String {
+    if text.len() <= max {
+        return text;
+    }
+    let mut cut = max;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    text.truncate(cut);
+    text.push_str("\n[truncated]");
+    text
+}
+
+/// Rounds of the `/llama run instruct` framework tool loop (archived
+/// `kMaxLlamaInstructToolRounds`).
+pub const MAX_INSTRUCT_TOOL_ROUNDS: usize = 8;
+/// Output budget per `/llama run instruct` step.
+pub const INSTRUCT_MAX_TOKENS: u32 = 128;
+
+const INSTRUCT_FOLLOW_UP: &str = "Use the tool result above to continue the original request. If more information is needed, request another framework tool. Do not repeat an exact tool call that has already succeeded. If enough information is available, answer in normal text.\nTool results for this step: ";
+
+/// One generation step of a tagged run.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Completion {
+    /// Generated text (empty when the reply was a tool call).
+    pub text: String,
+    pub tool_calls: Vec<ParsedToolCall>,
+    pub metadata: Value,
+}
+
+impl Completion {
+    /// Archived `completion_text`: text, or `tool_call: <name> <args>`.
+    pub fn display_text(&self) -> String {
+        let mut out = self.text.clone();
+        for call in &self.tool_calls {
+            out.push_str(&format!(
+                "tool_call: {} {}",
+                call.name,
+                dump(&call.arguments)
+            ));
+        }
+        out
+    }
+}
+
+/// Outcome of one framework tool call (archived `ToolResult`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRun {
+    /// `success`, `not_found` or `execution_error`.
+    pub status: &'static str,
+    pub output: Value,
+    pub error: Option<String>,
+}
+
+/// The `kv_pruned:` line when a completion reports context pruning.
+fn context_pressure_line(completion: &Completion) -> Option<String> {
+    let pressure = completion.metadata.get("kvCache")?.get("contextPressure")?;
+    let pruned = pressure.get("prunedTokens").and_then(Value::as_i64)?;
+    (pruned > 0).then(|| {
+        format!(
+            "kv_pruned: {pruned} tokens, position={}",
+            pressure
+                .get("afterSequencePosition")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+        )
+    })
+}
+
+/// Archived `infer_search_text_arguments`: `search|grep|find [for] <term>
+/// [in] [path]` becomes `{query, path, literal: true}`.
+pub fn infer_search_text_arguments(text: &str) -> Option<Value> {
+    let (verb, rest) = split_first(text);
+    if !matches!(
+        verb.to_ascii_lowercase().as_str(),
+        "search" | "grep" | "find"
+    ) {
+        return None;
+    }
+    let (mut term, mut tail) = split_first(rest);
+    if term.eq_ignore_ascii_case("for") {
+        (term, tail) = split_first(tail);
+    }
+    if term.is_empty() {
+        return None;
+    }
+    let mut path = tail.trim();
+    let (maybe_in, after_in) = split_first(path);
+    if maybe_in.eq_ignore_ascii_case("in") {
+        path = after_in;
+    }
+    let path = if path.is_empty() { "." } else { path };
+    Some(json!({"query": term, "path": path, "literal": true}))
+}
+
+fn tool_result_message(call_id: &str, name: &str, run: &ToolRun) -> Message {
+    let mut result = json!({"status": run.status, "output": run.output});
+    if let Some(error) = &run.error {
+        result["error"] = json!(error);
+    }
+    Message::ToolResult(ToolResultMessage {
+        tool_call_id: call_id.to_string(),
+        tool_name: name.to_string(),
+        content: vec![ContentBlock::text(truncate_transcript(dump(&result), 6000))],
+        is_error: run.status != "success",
+        details: None,
+        timestamp: None,
+    })
+}
+
+/// The archived `/llama run instruct` loop: generate with the framework
+/// tools, execute requested tool calls, feed the results back and repeat
+/// for at most [`MAX_INSTRUCT_TOOL_ROUNDS`] rounds, suppressing exact
+/// repeats of successful calls. `generate` runs one step over the message
+/// history; `execute` runs one tool call. Returns the transcript lines
+/// after the `instance:` line; an error is a failure of the first step.
+pub fn run_instruct_loop(
+    text: &str,
+    tool_count: usize,
+    generate: &mut dyn FnMut(&[Message]) -> Result<Completion, String>,
+    execute: &mut dyn FnMut(&str, Value) -> ToolRun,
+) -> Result<Vec<String>, String> {
+    // The archived provider appended each step to the retained session KV
+    // cache; here the history is replayed (and reused as a cached prefix).
+    let mut messages = vec![Message::user_text(text)];
+    let mut completion = generate(&messages)?;
+    let mut lines = Vec::new();
+    lines.extend(context_pressure_line(&completion));
+    let mut executed_tool = false;
+    let mut stopped = false;
+    let mut executed_results: Vec<Value> = Vec::new();
+    let mut successful: HashSet<String> = HashSet::new();
+    let mut rounds = 0;
+    while rounds < MAX_INSTRUCT_TOOL_ROUNDS {
+        let calls = completion.tool_calls.clone();
+        if calls.is_empty() {
+            break;
+        }
+        executed_tool = true;
+        rounds += 1;
+        let mut results: Vec<Message> = Vec::new();
+        let mut round_results: Vec<Value> = Vec::new();
+        let mut suppressed = false;
+        for call in &calls {
+            let mut arguments = call.arguments.clone();
+            if canonical_tool_name(&call.name) == "grep"
+                && arguments.is_object()
+                && arguments.get("query").is_none()
+                && arguments.get("pattern").is_none()
+                && let Some(mut inferred) = infer_search_text_arguments(text)
+            {
+                if let Some(path) = arguments.get("path") {
+                    inferred["path"] = path.clone();
+                }
+                arguments = inferred;
+            }
+            let key = format!("{}:{}", call.name, dump(&arguments));
+            if successful.contains(&key) {
+                lines.push(format!(
+                    "tool_loop: repeated tool call suppressed: {} {}",
+                    call.name,
+                    dump(&arguments)
+                ));
+                suppressed = true;
+                continue;
+            }
+            lines.push(format!(
+                "tool_call: {} {}",
+                call.name,
+                dump(&call.arguments)
+            ));
+            let run = execute(&call.name, arguments.clone());
+            if run.status == "success" {
+                successful.insert(key);
+            }
+            lines.push(format!(
+                "tool_result: {}{}",
+                run.status,
+                run.error
+                    .as_ref()
+                    .map(|e| format!(" - {e}"))
+                    .unwrap_or_default()
+            ));
+            let mut record = json!({
+                "tool": call.name,
+                "arguments": arguments,
+                "status": run.status,
+                "output": run.output,
+            });
+            if let Some(error) = &run.error {
+                record["error"] = json!(error);
+            }
+            round_results.push(record.clone());
+            executed_results.push(record);
+            results.push(tool_result_message(&call.id, &call.name, &run));
+        }
+        if suppressed && results.is_empty() {
+            stopped = true;
+            break;
+        }
+        messages.push(Message::Assistant(AssistantMessage {
+            content: calls
+                .iter()
+                .map(|c| ContentBlock::ToolCall {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    arguments: c.arguments.clone(),
+                })
+                .collect(),
+            stop_reason: StopReason::ToolCall,
+            ..Default::default()
+        }));
+        messages.extend(results);
+        messages.push(Message::user_text(format!(
+            "{INSTRUCT_FOLLOW_UP}{}",
+            truncate_transcript(dump(&Value::Array(round_results)), 6000)
+        )));
+        match generate(&messages) {
+            Ok(next) => {
+                completion = next;
+                lines.extend(context_pressure_line(&completion));
+            }
+            Err(e) => {
+                lines.push(format!("Llama instruct follow-up failed: {e}"));
+                break;
+            }
+        }
+    }
+    if rounds == MAX_INSTRUCT_TOOL_ROUNDS && !completion.tool_calls.is_empty() {
+        stopped = true;
+        lines.push(format!(
+            "Llama instruct tool loop stopped after {MAX_INSTRUCT_TOOL_ROUNDS} rounds."
+        ));
+    }
+    let output = completion.display_text();
+    if !stopped && (!executed_tool || !output.is_empty()) {
+        lines.push(if output.is_empty() {
+            "(llama returned no text)".into()
+        } else {
+            output.clone()
+        });
+    }
+    if executed_tool && (output.is_empty() || stopped) && !executed_results.is_empty() {
+        lines.push(format!(
+            "tool_output: {}",
+            truncate_transcript(dump(&Value::Array(executed_results)), 4000)
+        ));
+    }
+    lines.push(format!("tools_available: {tool_count}"));
+    Ok(lines)
 }
 
 fn set_llama_section(settings: &mut qt_core::Settings, section: &str, values: &Map<String, Value>) {
@@ -675,6 +1017,17 @@ impl Runtime {
                     current.as_ref(),
                     snapshot.as_ref(),
                 );
+                if let Some(grammar) = self.llama().runtime_grammar()
+                    && let Some(at) = lines.iter().position(|l| l.starts_with("grammar: "))
+                {
+                    lines.insert(
+                        at + 1,
+                        format!(
+                            "grammar_override: {}",
+                            grammar_override_text(Some(&grammar))
+                        ),
+                    );
+                }
                 lines.extend(self.llama().diagnostics());
                 Ok(lines)
             }
@@ -755,15 +1108,22 @@ impl Runtime {
                     .root
                     .clone()
                     .unwrap_or_else(|| "root".into());
+                let backend = self.llama();
                 match verb.to_ascii_lowercase().as_str() {
-                    "" | "status" | "show" => Ok(vec![format!(
-                        "grammar: root={root}, default={}",
-                        settings
-                            .grammar
-                            .default_grammar
-                            .clone()
-                            .unwrap_or_else(|| "(none)".into())
-                    )]),
+                    "" | "status" | "show" => Ok(vec![
+                        format!(
+                            "grammar: root={root}, default={}",
+                            settings
+                                .grammar
+                                .default_grammar
+                                .clone()
+                                .unwrap_or_else(|| "(none)".into())
+                        ),
+                        format!(
+                            "runtime_override: {}",
+                            grammar_override_text(backend.runtime_grammar().as_ref())
+                        ),
+                    ]),
                     "list" => {
                         let files = settings.grammar.files.clone().unwrap_or_default();
                         if files.is_empty() {
@@ -775,13 +1135,45 @@ impl Runtime {
                             .collect())
                     }
                     "off" => {
-                        let mut values = Map::new();
-                        values.insert("default".into(), Value::Null);
-                        engine
-                            .update_settings(|s| set_llama_section(s, "grammar", &values))
-                            .map_err(|e| fail(format!("{e:#}")))?;
+                        backend.set_runtime_grammar(Some(json!({"enabled": false})));
                         Ok(vec![
                             "Llama grammar constraints disabled for subsequent turns.".into(),
+                        ])
+                    }
+                    "inline" => {
+                        if value.is_empty() {
+                            return Err(fail("Usage: /llama grammar inline <gbnf>".into()));
+                        }
+                        backend.set_runtime_grammar(Some(json!({"inline": value, "root": root})));
+                        Ok(vec![
+                            "Llama inline grammar configured for subsequent turns.".into(),
+                            format!("root: {root}"),
+                        ])
+                    }
+                    "file" => {
+                        let (path, file_root) = split_path_argument(value);
+                        if path.is_empty() {
+                            return Err(fail("Usage: /llama grammar file <path> [root]".into()));
+                        }
+                        let resolved = resolve_safe_grammar_path(
+                            &path,
+                            engine.cwd(),
+                            Some(engine.workspace_policy().root()),
+                            Some(self.agent_home().root()),
+                        )
+                        .map_err(fail)?;
+                        let resolved = resolved.to_string_lossy().replace('\\', "/");
+                        let file_root = if file_root.is_empty() {
+                            root
+                        } else {
+                            file_root.to_string()
+                        };
+                        backend.set_runtime_grammar(Some(
+                            json!({"file": resolved, "root": file_root}),
+                        ));
+                        Ok(vec![
+                            "Llama file grammar configured for subsequent turns.".into(),
+                            format!("path: {resolved}"),
                         ])
                     }
                     "default" | "use" => {
@@ -797,13 +1189,14 @@ impl Runtime {
                         engine
                             .update_settings(|s| set_llama_section(s, "grammar", &values))
                             .map_err(|e| fail(format!("{e:#}")))?;
+                        backend.set_runtime_grammar(None);
                         Ok(vec![
                             format!("Llama grammar {value} configured for subsequent turns."),
                             format!("root: {root}"),
                         ])
                     }
                     other => Err(fail(format!(
-                        "Unsupported llama grammar command: {other}. Usage: /llama grammar [show|list|default <name>|off]"
+                        "Unsupported llama grammar command: {other}. Usage: /llama grammar [show|off|inline <gbnf>|file <path> [root]|list|default <name>]"
                     ))),
                 }
             }
@@ -888,9 +1281,23 @@ impl Runtime {
                 }
                 let r = runtime();
                 let _ = r.kv_cache_control(KvCacheOperation::Clear, InstanceTag::Chat);
-                self.llama_generate(&r, &settings, &id, rest, InstanceTag::Chat)
-                    .map(|text| vec![text])
-                    .map_err(|e| fail(format!("Llama prompt failed: {e}")))
+                self.llama_complete(
+                    &r,
+                    &settings,
+                    &id,
+                    vec![Message::user_text(rest)],
+                    &[],
+                    0,
+                    InstanceTag::Chat,
+                )
+                .map(|c| {
+                    vec![if c.text.is_empty() {
+                        "(llama returned no text)".to_string()
+                    } else {
+                        c.text
+                    }]
+                })
+                .map_err(|e| fail(format!("Llama prompt failed: {e}")))
             }
             "run" => {
                 let id = self.require_selection(
@@ -921,9 +1328,48 @@ impl Runtime {
                         .map_err(|e| fail(format!("Llama embed run failed: {e}")));
                 }
                 let _ = r.kv_cache_control(KvCacheOperation::Clear, tag);
-                self.llama_generate(&r, &settings, &id, text, tag)
-                    .map(|out| vec![format!("instance: {}", tag.as_str()), out])
-                    .map_err(|e| fail(format!("Llama {} run failed: {e}", tag.as_str())))
+                let instance = format!("instance: {}", tag.as_str());
+                let failed = |e: String| fail(format!("Llama {} run failed: {e}", tag.as_str()));
+                if tag == InstanceTag::Instruct {
+                    let tools = self.llama_instruct_tools();
+                    let specs: Vec<ToolSpec> = tools.specs();
+                    let mut generate = |messages: &[Message]| {
+                        self.llama_complete(
+                            &r,
+                            &settings,
+                            &id,
+                            messages.to_vec(),
+                            &specs,
+                            INSTRUCT_MAX_TOKENS,
+                            tag,
+                        )
+                    };
+                    let mut execute =
+                        |name: &str, args: Value| self.llama_run_tool(&tools, name, args);
+                    let lines = run_instruct_loop(text, specs.len(), &mut generate, &mut execute)
+                        .map_err(failed)?;
+                    return Ok(std::iter::once(instance).chain(lines).collect());
+                }
+                let completion = self
+                    .llama_complete(
+                        &r,
+                        &settings,
+                        &id,
+                        vec![Message::user_text(text)],
+                        &[],
+                        0,
+                        tag,
+                    )
+                    .map_err(failed)?;
+                let mut lines = vec![instance];
+                lines.extend(context_pressure_line(&completion));
+                let output = completion.display_text();
+                lines.push(if output.is_empty() {
+                    "(llama returned no text)".into()
+                } else {
+                    output
+                });
+                Ok(lines)
             }
             "discover" => {
                 let dirs: Vec<PathBuf> = rest
@@ -947,28 +1393,89 @@ impl Runtime {
         }
     }
 
-    fn llama_generate(
+    /// One non-streaming generation on instance `tag` with the runtime
+    /// grammar override applied; a reply that is a tool call in the
+    /// archived protocol is returned as `tool_calls`.
+    #[allow(clippy::too_many_arguments)]
+    fn llama_complete(
         &self,
         runtime: &LlamaRuntime,
         settings: &LlamaSettings,
         model: &str,
-        text: &str,
+        messages: Vec<Message>,
+        tools: &[ToolSpec],
+        max_tokens: u32,
         tag: InstanceTag,
-    ) -> Result<String, String> {
+    ) -> Result<Completion, String> {
         let request = Request {
             model: model.to_string(),
-            messages: vec![Message::user_text(text)],
+            messages,
+            tools: tools.to_vec(),
+            max_tokens,
             ..Default::default()
         };
-        let generate = make_generate_request(settings, &request, &GenerateOptions::default())
-            .map_err(|e| e.to_string())?;
+        let options = self.llama().generate_options();
+        let generate =
+            make_generate_request(settings, &request, &options).map_err(|e| e.to_string())?;
         let result = runtime.generate(generate, tag).map_err(|e| e.to_string())?;
-        let text = result.text.trim().to_string();
-        Ok(if text.is_empty() {
-            "(llama returned no text)".into()
-        } else {
-            text
+        if !tools.is_empty()
+            && let Some(call) = parse_tool_call(&result.text, tools)
+        {
+            return Ok(Completion {
+                text: String::new(),
+                tool_calls: vec![call],
+                metadata: result.metadata,
+            });
+        }
+        Ok(Completion {
+            text: result.text.trim().to_string(),
+            tool_calls: Vec::new(),
+            metadata: result.metadata,
         })
+    }
+
+    /// The framework tools offered to `/llama run instruct`: the active
+    /// conversation's tool set (every available tool without one).
+    fn llama_instruct_tools(&self) -> ToolRegistry {
+        let mut tools = self.engine().tools();
+        if let Some(conversation) = self.active_conversation() {
+            let active = conversation.active_tools();
+            tools.retain(|name| active.iter().any(|a| a == name));
+        }
+        tools
+    }
+
+    /// Run one instruct tool call through the normal tool set (workspace
+    /// policy, mutation policy, argument aliases and output guard).
+    fn llama_run_tool(&self, tools: &ToolRegistry, name: &str, args: Value) -> ToolRun {
+        if tools.get(name).is_none() {
+            return ToolRun {
+                status: "not_found",
+                output: Value::Null,
+                error: Some("requested tool is not registered".into()),
+            };
+        }
+        let engine = self.engine();
+        let ctx = engine
+            .tool_environment(None)
+            .context(engine.cwd().to_path_buf());
+        let output = engine
+            .runtime_handle()
+            .block_on(tools.execute(name, args, ctx));
+        let text = output.text_content();
+        if output.is_error {
+            ToolRun {
+                status: "execution_error",
+                output: Value::Null,
+                error: Some(text),
+            }
+        } else {
+            ToolRun {
+                status: "success",
+                output: Value::String(text),
+                error: None,
+            }
+        }
     }
 }
 
@@ -1145,5 +1652,299 @@ mod tests {
         values.insert("mainGpu".into(), json!(1));
         set_llama_section(&mut s, "backend", &values);
         assert_eq!(s.raw()["llama"], json!({"backend": {"mainGpu": 1}}));
+    }
+
+    #[test]
+    fn gpu_errors_use_archived_wording() {
+        assert_eq!(
+            parse_gpu("mainGpu=-1").unwrap_err(),
+            "mainGpu must be an integer >= 0"
+        );
+        assert_eq!(
+            parse_gpu("gpuLayers=x").unwrap_err(),
+            "gpuLayers must be an integer"
+        );
+        assert_eq!(
+            parse_gpu("splitMode=diag").unwrap_err(),
+            "splitMode must be one of: none, layer, row"
+        );
+        assert_eq!(
+            parse_gpu("useMmap=maybe").unwrap_err(),
+            "useMmap must be a boolean"
+        );
+        assert_eq!(
+            parse_gpu("tensorSplit=1").unwrap_err(),
+            "Unsupported llama GPU setting: tensorSplit"
+        );
+        assert!(
+            parse_gpu("gpuLayers")
+                .unwrap_err()
+                .starts_with("Usage: /llama gpu")
+        );
+        assert_eq!(
+            Value::Object(parse_gpu("splitMode=ROW useMmap=no useMlock=1").unwrap()),
+            json!({"splitMode": "row", "useMmap": false, "useMlock": true})
+        );
+    }
+
+    #[test]
+    fn grammar_paths_are_confined_like_archived() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = qt_core::policy::weakly_canonical(dir.path());
+        let cwd = root.join("work");
+        let home = root.join("home");
+        std::fs::create_dir_all(cwd.join("g")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(cwd.join("g/a.gbnf"), "root ::= \"a\"").unwrap();
+        std::fs::write(home.join("h.gbnf"), "root ::= \"h\"").unwrap();
+        assert_eq!(
+            resolve_safe_grammar_path("g/a.gbnf", &cwd, None, Some(&home)).unwrap(),
+            cwd.join("g/a.gbnf")
+        );
+        assert_eq!(
+            resolve_safe_grammar_path("g/../g/new.gbnf", &cwd, None, None).unwrap(),
+            cwd.join("g/new.gbnf")
+        );
+        let in_home = home.join("h.gbnf");
+        assert_eq!(
+            resolve_safe_grammar_path(in_home.to_str().unwrap(), &cwd, None, Some(&home)).unwrap(),
+            in_home
+        );
+        let refused = "llama grammar path must be under cwd, workspace root, agent home, or lib/llama.cpp/grammars";
+        assert_eq!(
+            resolve_safe_grammar_path("../home/h.gbnf", &cwd, None, None).unwrap_err(),
+            refused
+        );
+        assert_eq!(
+            resolve_safe_grammar_path("/etc/passwd", &cwd, None, Some(&home)).unwrap_err(),
+            refused
+        );
+        assert!(resolve_safe_grammar_path("../home/h.gbnf", &cwd, Some(&root), None).is_ok());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&home, cwd.join("escape")).unwrap();
+            assert_eq!(
+                resolve_safe_grammar_path("escape/h.gbnf", &cwd, None, None).unwrap_err(),
+                refused
+            );
+        }
+        assert_eq!(
+            split_path_argument("\"my dir/a.gbnf\" start"),
+            ("my dir/a.gbnf".to_string(), "start")
+        );
+        assert_eq!(split_path_argument("a.gbnf"), ("a.gbnf".to_string(), ""));
+        assert_eq!(grammar_override_text(None), "null");
+        assert_eq!(
+            grammar_override_text(Some(&json!({"root": "root", "inline": "x"}))),
+            r#"{"inline":"x","root":"root"}"#
+        );
+    }
+
+    fn call(name: &str, arguments: Value) -> Completion {
+        Completion {
+            tool_calls: vec![ParsedToolCall {
+                id: "call_1".into(),
+                name: name.into(),
+                arguments,
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn text(text: &str) -> Completion {
+        Completion {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    fn ok(output: &str) -> ToolRun {
+        ToolRun {
+            status: "success",
+            output: json!(output),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn instruct_loop_executes_tools_and_answers() {
+        let mut steps = vec![call("read", json!({"path": "a.txt"})), text("It says hi.")];
+        steps.reverse();
+        let mut seen: Vec<Vec<Message>> = Vec::new();
+        let mut generate = |m: &[Message]| {
+            seen.push(m.to_vec());
+            Ok(steps.pop().unwrap())
+        };
+        let mut executed = Vec::new();
+        let mut execute = |name: &str, args: Value| {
+            executed.push((name.to_string(), args));
+            ok("hi")
+        };
+        let lines = run_instruct_loop("read a.txt", 7, &mut generate, &mut execute).unwrap();
+        assert_eq!(
+            lines,
+            [
+                r#"tool_call: read {"path":"a.txt"}"#,
+                "tool_result: success",
+                "It says hi.",
+                "tools_available: 7",
+            ]
+        );
+        assert_eq!(executed, [("read".to_string(), json!({"path": "a.txt"}))]);
+        // The follow-up keeps the request, the call, its result and the
+        // archived instruction with this step's results.
+        let follow_up = &seen[1];
+        assert_eq!(follow_up.len(), 4);
+        assert!(
+            matches!(&follow_up[1], Message::Assistant(a) if a.stop_reason == StopReason::ToolCall)
+        );
+        let Message::ToolResult(result) = &follow_up[2] else {
+            panic!("tool result expected");
+        };
+        assert_eq!(result.text(), r#"{"output":"hi","status":"success"}"#);
+        let Message::User { content, .. } = &follow_up[3] else {
+            panic!("instruction expected");
+        };
+        let instruction = content
+            .blocks()
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text { text } => text.clone(),
+                _ => String::new(),
+            })
+            .collect::<String>();
+        assert!(
+            instruction.starts_with("Use the tool result above to continue the original request.")
+        );
+        assert!(instruction.ends_with(
+            r#"Tool results for this step: [{"arguments":{"path":"a.txt"},"output":"hi","status":"success","tool":"read"}]"#
+        ));
+    }
+
+    #[test]
+    fn instruct_loop_suppresses_repeats_and_reports_output() {
+        let mut generate = |_: &[Message]| Ok(call("ls", json!({"path": "."})));
+        let mut count = 0;
+        let mut execute = |_: &str, _: Value| {
+            count += 1;
+            ok("a.txt")
+        };
+        let lines = run_instruct_loop("list files", 2, &mut generate, &mut execute).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(
+            lines,
+            [
+                r#"tool_call: ls {"path":"."}"#,
+                "tool_result: success",
+                r#"tool_loop: repeated tool call suppressed: ls {"path":"."}"#,
+                r#"tool_output: [{"arguments":{"path":"."},"output":"a.txt","status":"success","tool":"ls"}]"#,
+                "tools_available: 2",
+            ]
+        );
+    }
+
+    #[test]
+    fn instruct_loop_stops_after_eight_rounds() {
+        let mut n = 0;
+        let mut generate = |_: &[Message]| {
+            n += 1;
+            Ok(call("read", json!({"path": format!("{n}.txt")})))
+        };
+        let mut execute = |_: &str, _: Value| ToolRun {
+            status: "execution_error",
+            output: Value::Null,
+            error: Some("missing".into()),
+        };
+        let lines = run_instruct_loop("go", 1, &mut generate, &mut execute).unwrap();
+        assert_eq!(n, MAX_INSTRUCT_TOOL_ROUNDS + 1);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.as_str() == "tool_result: execution_error - missing")
+                .count(),
+            MAX_INSTRUCT_TOOL_ROUNDS
+        );
+        let tail = &lines[lines.len() - 3..];
+        assert_eq!(tail[0], "Llama instruct tool loop stopped after 8 rounds.");
+        assert!(
+            tail[1].starts_with(r#"tool_output: [{"arguments":{"path":"1.txt"},"error":"missing""#)
+        );
+        assert_eq!(tail[2], "tools_available: 1");
+    }
+
+    #[test]
+    fn instruct_loop_failures_and_plain_answers() {
+        let mut failing = |_: &[Message]| Err::<Completion, _>("boom".to_string());
+        let mut never = |_: &str, _: Value| -> ToolRun { unreachable!() };
+        assert_eq!(
+            run_instruct_loop("hi", 0, &mut failing, &mut never).unwrap_err(),
+            "boom"
+        );
+
+        let mut plain = |_: &[Message]| Ok(text(""));
+        assert_eq!(
+            run_instruct_loop("hi", 0, &mut plain, &mut never).unwrap(),
+            ["(llama returned no text)", "tools_available: 0"]
+        );
+
+        let mut first = true;
+        let mut follow_up_fails = |_: &[Message]| {
+            if std::mem::take(&mut first) {
+                Ok(call("grep", json!({"path": "src"})))
+            } else {
+                Err("llama context overflow".to_string())
+            }
+        };
+        let mut args_seen = Value::Null;
+        let mut execute = |_: &str, args: Value| {
+            args_seen = args;
+            ok("src/a.rs:1:foo")
+        };
+        let lines = run_instruct_loop(
+            "search for foo in lib",
+            3,
+            &mut follow_up_fails,
+            &mut execute,
+        )
+        .unwrap();
+        // search_text inference keeps the model's path.
+        assert_eq!(
+            args_seen,
+            json!({"query": "foo", "path": "src", "literal": true})
+        );
+        assert_eq!(lines[0], r#"tool_call: grep {"path":"src"}"#);
+        assert_eq!(
+            lines[2],
+            "Llama instruct follow-up failed: llama context overflow"
+        );
+        assert_eq!(lines[3], r#"tool_call: grep {"path":"src"}"#);
+        assert_eq!(lines[4], "tools_available: 3");
+    }
+
+    #[test]
+    fn search_text_inference_matches_archived() {
+        assert_eq!(
+            infer_search_text_arguments("search banana notes.txt"),
+            Some(json!({"query": "banana", "path": "notes.txt", "literal": true}))
+        );
+        assert_eq!(
+            infer_search_text_arguments("Find for x in src/lib"),
+            Some(json!({"query": "x", "path": "src/lib", "literal": true}))
+        );
+        assert_eq!(
+            infer_search_text_arguments("grep y"),
+            Some(json!({"query": "y", "path": ".", "literal": true}))
+        );
+        assert_eq!(infer_search_text_arguments("read a"), None);
+        assert_eq!(infer_search_text_arguments("search"), None);
+        assert_eq!(truncate_transcript("abcdef".into(), 3), "abc\n[truncated]");
+        let pressure = Completion {
+            metadata: json!({"kvCache": {"contextPressure": {"prunedTokens": 12, "afterSequencePosition": 40}}}),
+            ..Default::default()
+        };
+        assert_eq!(
+            context_pressure_line(&pressure).as_deref(),
+            Some("kv_pruned: 12 tokens, position=40")
+        );
     }
 }
