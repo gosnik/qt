@@ -9,6 +9,7 @@ edition = "2024"
 
 [workspace.dependencies]
 qt-core = { path = "crates/qt-core" }
+qt-mcp = { path = "crates/qt-mcp" }
 
 anyhow = "1"
 async-channel = "2"
