@@ -442,6 +442,7 @@ impl Workspace {
                         cx,
                     ),
                 }
+                this.drain_startup_lines(window, cx);
                 cx.notify();
             });
         });

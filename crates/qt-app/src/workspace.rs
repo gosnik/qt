@@ -7,6 +7,7 @@ mod history;
 mod panels;
 mod picker;
 mod slash;
+mod startup_input;
 mod status_line;
 mod subsystems;
 
@@ -19,12 +20,11 @@ use async_channel::Receiver;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use qt_core::message::{AgentMessage, BashExecutionMessage};
-use qt_core::slash::looks_like_command;
 use qt_core::tools::MutationPolicy;
 
-use self::completion::parse_bash;
 use self::composer_ui::{BashRun, CompletionPopup};
 use self::history::PromptHistory;
+use self::startup_input::{LineKind, StartupLine, classify_line};
 use self::status_line::StatusLine;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::notification::Notification;
@@ -111,7 +111,7 @@ type ModelSelect = SelectState<SearchableVec<ModelItem>>;
 type ThinkingSelect = SelectState<Vec<ThinkingItem>>;
 
 /// What the current event pump is running.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RunKind {
     Agent,
     Compaction,
@@ -154,6 +154,9 @@ pub struct Workspace {
     /// Runs started by extensions or subagent completions while another
     /// run was being shown.
     pending_runs: VecDeque<Receiver<AgentEvent>>,
+    /// Command-line messages not submitted yet (waiting for a run or user
+    /// bash to finish).
+    startup_lines: VecDeque<StartupLine>,
     /// Status line: git branch, OpenRouter credits, review poll state.
     status: StatusLine,
     _event_task: Option<Task<()>>,
@@ -276,6 +279,7 @@ impl Workspace {
             pending_mutations: 0,
             ext,
             pending_runs: VecDeque::new(),
+            startup_lines: VecDeque::new(),
             status: StatusLine::default(),
             _event_task: None,
             _ticker: None,
@@ -495,8 +499,8 @@ impl Workspace {
             return;
         }
         self.completion = None;
-        if self.attachments.is_empty() {
-            if let Some((command, exclude)) = parse_bash(&raw) {
+        match classify_line(&raw, !self.attachments.is_empty()) {
+            LineKind::Bash { command, exclude } => {
                 if self.run_user_bash(&command, exclude, window, cx) {
                     self.history_record(&raw, window, cx);
                     self.clear_composer(window, cx);
@@ -504,13 +508,14 @@ impl Workspace {
                 cx.notify();
                 return;
             }
-            if looks_like_command(&raw) {
+            LineKind::Slash => {
                 self.history_record(&raw, window, cx);
                 self.clear_composer(window, cx);
                 self.run_slash(&raw, window, cx);
                 cx.notify();
                 return;
             }
+            LineKind::Prompt => {}
         }
         let (text, images) = prompt_payload(&raw, &self.attachments);
         if !self.send_text(&text, images, follow_up, window, cx) {
@@ -582,6 +587,7 @@ impl Workspace {
         self.queue = self.conversation.queue();
         self.sync_entry_ids(cx);
         self.next_pending_run(window, cx);
+        self.drain_startup_lines(window, cx);
         cx.notify();
     }
 
@@ -663,7 +669,12 @@ impl Workspace {
             }
             AgentEvent::AgentEnd { aborted, .. } => {
                 if aborted {
-                    let restored = self.conversation.clear_queue();
+                    let mut restored = self.conversation.clear_queue();
+                    // Unsent command-line messages come back like queued
+                    // follow-ups instead of running after the abort.
+                    restored
+                        .follow_up
+                        .extend(self.startup_lines.drain(..).map(|(text, _)| text));
                     if !restored.is_empty() {
                         let draft = self.composer_text(cx);
                         let text = dequeue_text(&restored, &draft);
