@@ -70,6 +70,12 @@ archived `scripts/build_llama_cpp.py`:
 `qt-index` also uses `qt-core`, `futures`, `regex`, `serde_json`, `tokio` and `tempfile` (dev)
 from the lists above.
 
+## Governed memory (`qt-memory`)
+
+| Crate | Why |
+| --- | --- |
+| `rusqlite` (bundled) | SQLite store at `<agent_home>/memory/memory.sqlite3`; the bundled build provides FTS5 and JSON1, matching the archived schema and migrations without a system SQLite |
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including

@@ -327,3 +327,39 @@ Ported from the archived `index` subsystem and `tools/index_tool.cpp`.
   read results render text contents, image blobs as images and other blobs as a summary
   line. MCP proxy results also carry image content blocks. MCP files contribute only their
   servers, not other settings keys.
+
+## Governed memory (`qt-memory`)
+
+Pi has no persistent-memory contract; the archived qt is the reference.
+
+- **Store:** `<agent_home>/memory/memory.sqlite3` with `blocks/` and `exports/` beside it
+  (directories 0700, database 0600), WAL, `synchronous=FULL`, foreign keys and a jittered
+  busy-retry handler. Migrations v1–v7 are byte-identical to the archived SQL (a test
+  extracts them from `archived/`), so databases written by the C++ binary open unchanged and
+  partially migrated ones are upgraded. A standalone qtmem database (legacy `meta` table)
+  is refused with "standalone qtmem database requires explicit offline import"; schema
+  versions above 7 are refused.
+- **Model and wording:** memory types, statuses, source types, scope kinds and dimensions,
+  scope keys, recall policies, review kinds, actions, application statuses and batch job
+  statuses use the archived spellings, and error messages match the archived text. Stored
+  JSON uses the archived encoding (compact, sorted keys).
+- **Same behaviour:** write policy and secret/path redaction, governance transitions and
+  audit, review preview/apply with revision compare-and-set and idempotent action keys,
+  atomic review mutations, scheduled resurfacing, constrained batches and background batch
+  jobs, persisted view state, review statistics, native export/import with ID remapping,
+  retention, historical scrub, read-only qtmem v3 import and skill import. `memory.*`
+  settings use the archived defaults, validation and the project-may-not-broaden rule.
+- **Differences:**
+  - Text fields are truncated to their byte limits on a UTF-8 character boundary (the C++
+    store could split a multi-byte character).
+  - A graph-edge upsert reports the ID of the stored edge; the archived store returned a
+    freshly generated ID that was never written when the edge already existed.
+  - Import with replace clears the scope's assertion revision boundaries, so restoring a
+    backup into the same scope (preserved IDs) no longer fails on the insert trigger.
+  - Export reads review actions with the export's own limit; the archived export applied
+    the interactive 10 000-row history cap and failed for backups (limit 100 000).
+  - Lenient JSON readers: a field of the wrong type in an imported document falls back to
+    its default instead of aborting the import.
+- **Not yet ported:** recall (lexical, graph, dense, code), context rendering, the
+  pre-handler, capture/ingestion, post-processing, Dreaming, research, the verifier, memory
+  tools, the `qt memory` CLI and the GUI.

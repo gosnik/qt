@@ -1,0 +1,15 @@
+[package]
+name = "qt-memory"
+description = "Governed memory for qt: SQLite store, scopes, governance, review workflow and imports"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rand.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
