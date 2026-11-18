@@ -37,6 +37,10 @@ tokio-util = "0.7"
 unicode-normalization = "0.1"
 url = "2"
 
+rusqlite = { version = "0.37", features = ["bundled"] }
+tree-sitter = "0.25"
+tree-sitter-cpp = "0.23"
+
 gpui-kit = "0.10.0"
 
 # Build-time only (qt-llama-sys)

@@ -1,0 +1,19 @@
+[package]
+name = "qt-index"
+description = "Project index for qt: gitignore-aware scanning, build metadata, C/C++ code index, SQLite FTS store and index tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+qt-core.workspace = true
+futures.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tree-sitter.workspace = true
+tree-sitter-cpp.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

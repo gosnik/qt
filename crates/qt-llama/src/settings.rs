@@ -990,6 +990,7 @@ impl LlamaSettings {
                     .effective_context_window(model)
                     .and_then(|v| u64::try_from(v).ok())
                     .filter(|v| *v > 0),
+                ..Default::default()
             })
             .collect()
     }

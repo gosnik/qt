@@ -60,6 +60,16 @@ archived `scripts/build_llama_cpp.py`:
   loader and headers, `glslc` and SPIR-V headers (`libvulkan-dev glslc spirv-headers` on
   Debian/Ubuntu); CUDA/HIP need their toolkits. `QT_LLAMA_LOG=1` keeps llama.cpp's log output.
 
+## Project index (`qt-index`)
+
+| Crate | Why |
+| --- | --- |
+| `rusqlite` (bundled) | Index snapshot store with the FTS5 `index_fts` table; bundled SQLite so FTS5 is always compiled in |
+| `tree-sitter`, `tree-sitter-cpp` | In-process C++ parsing for the per-file tree-sitter metadata (replaces the vendored C runtime and grammar) |
+
+`qt-index` also uses `qt-core`, `futures`, `regex`, `serde_json`, `tokio` and `tempfile` (dev)
+from the lists above.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including

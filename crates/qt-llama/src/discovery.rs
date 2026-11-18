@@ -785,6 +785,7 @@ impl DiscoveredModel {
                 .context_length
                 .and_then(|v| u64::try_from(v).ok())
                 .filter(|v| *v > 0),
+            ..Default::default()
         }
     }
 }
