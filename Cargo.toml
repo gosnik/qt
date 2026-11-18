@@ -1,0 +1,65 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+default-members = ["crates/qt-app", "crates/qt-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+qt-core = { path = "crates/qt-core" }
+qt-llama-sys = { path = "crates/qt-llama-sys" }
+qt-llama = { path = "crates/qt-llama" }
+qt-mcp = { path = "crates/qt-mcp" }
+qt-extensions = { path = "crates/qt-extensions" }
+qt-subagents = { path = "crates/qt-subagents" }
+qt-index = { path = "crates/qt-index" }
+qt-memory = { path = "crates/qt-memory" }
+qt-runtime = { path = "crates/qt-runtime" }
+
+anyhow = "1"
+async-channel = "2"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "6"
+futures = "0.3"
+globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+ignore = "0.4"
+libc = "0.2"
+notify = "8"
+rand = "0.9"
+rusqlite = { version = "0.43", features = ["bundled"] }
+regex = "1"
+rhai = { version = "1.23", features = ["sync", "serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+similar = "2.7"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "time", "sync"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+markdown = "1"
+unicode-normalization = "0.1"
+url = "2"
+
+tree-sitter = "0.25"
+tree-sitter-cpp = "0.23"
+
+gpui-kit = "0.10.0"
+
+# Build-time only (qt-llama-sys)
+bindgen = "0.72"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = "debuginfo"
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,19 @@
+[package]
+name = "qt-memory"
+description = "Governed memory for qt: SQLite store, scopes, governance, review workflow and imports"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+futures.workspace = true
+qt-core.workspace = true
+rand.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

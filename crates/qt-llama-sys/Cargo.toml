@@ -1,0 +1,12 @@
+[package]
+name = "qt-llama-sys"
+description = "Builds the pinned PrismML llama.cpp fork and exposes raw FFI bindings"
+version.workspace = true
+edition.workspace = true
+links = "llama"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+bindgen.workspace = true

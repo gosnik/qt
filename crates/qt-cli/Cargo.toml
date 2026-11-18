@@ -1,0 +1,27 @@
+[package]
+name = "qt-cli"
+description = "Headless front end for the qt coding agent: print, JSON and RPC modes, model listing, export and package/memory subcommands"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "qt-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+qt-core.workspace = true
+qt-extensions.workspace = true
+qt-index.workspace = true
+qt-llama.workspace = true
+qt-memory.workspace = true
+qt-runtime.workspace = true
+qt-subagents.workspace = true
+rand.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true

@@ -1,39 +1,32 @@
 # qt Agent Instructions
 
-## ⚡ Fast-Track Execution Rules
-- **Skip Exploratory Searches:** Do not read raw files to look for definitions. Use `grep`, `git grep`, or specialized symbol search tools immediately.
-- **No Drafts / No Placeholders:** Write complete production-ready code on the first pass. Never leave `// TODO` or `// Implement here` blocks.
-- **Parallel Sub-Agents:** Spin up sub-agents instantly for decoupled tasks.
-
 ## Scope & Priorities
-- **Target:** Native C++17 repository at the repo root.
-- **Parity Source:** `reference/pi` (TypeScript/JavaScript). Treat as behavioral truth. Do not edit unless explicitly requested.
-- **Secondary References:** Read and use `REFS.md` when implementing features. Treat it as the approved index for non-`reference/pi` reference material when the primary parity source is silent or ambiguous.
-- **Dependency Lock:** Use only libraries pinned in `platformio.ini` and documented in `docs/dependencies.md`. Never add new dependencies.
+- **Target:** Rust workspace at the repo root (`crates/qt-core`, `crates/qt-app`, `crates/qt-cli`), with a GPUI desktop UI.
+- **Parity Source:** `reference/pi` (TypeScript). Treat it as behavioral truth for tools, sessions, prompts and agent-loop semantics. Do not edit unless explicitly requested.
+- **Archived Implementation:** `archived/` holds the previous C++17/TUI qt. Use it as a reference for qt-specific behavior (agent home layout, settings keys, memory, extensions, llama.cpp integration). Do not build, modify or extend it.
+- **Secondary References:** `archived/REFS.md` indexes approved non-Pi reference material when the primary source is silent or ambiguous.
+- **Dependency Lock:** Use only crates declared in the root `Cargo.toml` `[workspace.dependencies]` and documented in `docs/dependencies.md`. Adding a crate requires updating both, with a one-line justification.
 
-## High-Velocity Parity Workflow
+## Parity Workflow
 1. **Locate Contract:** Find the reference contract in `reference/pi/packages/**` or `reference/pi/docs/**`.
-2. **Check Secondary Index:** Read `REFS.md` for relevant secondary references before borrowing patterns from non-`reference/pi` sources.
-3. **Locate Native Owner:** Find destination files in `src/**` or `include/**`.
-4. **Verify Gaps:** Record the task and relevant acceptance criteria in `PLAN.md` before coding; consult the linked specifications and compatibility notes.
-5. **Behavior Over Structure:** Replicate exact CLI, RPC, TUI, and session outcomes. Do not copy line-by-line TypeScript or Node.js internal patterns.
-6. **Lookup Hierarchy:**
-    1. Reference docs (for intent)
-    2. Reference source (implementation details)
-    3. `REFS.md` indexed secondary references (only when the primary source is silent or thin)
+2. **Locate Native Owner:** Find the destination module (`qt-core` for anything that is not presentation, `qt-app` for GPUI views, `qt-cli` for headless output).
+3. **Record the Gap:** Add or update the item in `PLAN.md` with acceptance criteria before coding.
+4. **Behavior Over Structure:** Replicate observable outcomes (tool output wording, session files, request shapes). Do not port TypeScript structure line by line.
 
-## C++17 Architecture Directives
-- **Ownership & Safety:** Enforce RAII, strict `const`-correctness, clear object lifecycles, and explicit invariants.
-- **Dependency Injection:** Use constructor injection for required dependencies. Avoid service locators.
-- **Composition over Inheritance:** Prefer composition. Use polymorphism only when dynamic runtime dispatch is required.
-- **Lean Interfaces:** Use focused, role-specific interfaces. Do not build abstract "god interfaces" or wrap single-implementation classes unnecessarily.
+## Architecture Directives
+- **Core stays UI-agnostic:** `qt-core` must not depend on GPUI. Front ends talk to it only through `Engine`, `Conversation` and `AgentEvent`.
+- **Async boundary:** network and tool work runs on the engine's Tokio runtime; GPUI code awaits `async_channel` receivers or Tokio `JoinHandle`s and never blocks the UI thread.
+- **Ownership:** prefer owned data and explicit `Arc`/`Mutex` boundaries; hold locks only for short, non-`await` critical sections.
+- **Lean interfaces:** use traits only where runtime dispatch is needed (`Tool`). No god objects or single-implementation wrappers.
+- **Errors:** model-facing failures become tool or assistant error messages; user-facing failures become GPUI notifications. No panics on user input or network data.
 
 ## State Tracking (`PLAN.md`)
-- **Pre-read Required:** Read `PLAN.md` before writing any implementation code.
-- **Atomic Updates:** Update checkboxes immediately upon finishing a component.
-- **Strict Completion:** Mark `[x]` only if code and edge-case behavior fully satisfy the item.
-- **Partial Shifts:** Leave items `[ ]` if partially done. Detail the missing gap explicitly in the final chat response. Do not let context drift out of the markdown files.
+- Read `PLAN.md` before writing implementation code.
+- Mark `[x]` only when code and edge cases fully satisfy the item; otherwise leave `[ ]` and state the gap.
 
-## Verification & Definition of Done (DoD)
-- **Automated Verification:** Run the available build and framework checks before claiming success.
-- **Artifact Updates:** Every complete change requires updating `docs/upstream-compatibility.md` when compatibility behavior changes.
+## Verification & Definition of Done
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets` (no warnings)
+- `cargo test --workspace`
+- For UI changes, run the app (`cargo run -p qt-app`) and check the affected view. Never inject synthetic input into the user's live desktop session; use an isolated display (for example `Xvfb :99`) for scripted UI checks. Launch the app there with `env -u WAYLAND_DISPLAY DISPLAY=:99 ...`: GPUI prefers Wayland, so a leftover `WAYLAND_DISPLAY` opens the window on the user's desktop.
+- Update `docs/upstream-compatibility.md` whenever behavior relative to Pi or the archived qt changes.

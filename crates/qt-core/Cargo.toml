@@ -1,0 +1,39 @@
+[package]
+name = "qt-core"
+description = "UI-agnostic agent runtime for qt: providers, tools, agent loop and sessions"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+base64.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+futures.workspace = true
+globset.workspace = true
+notify.workspace = true
+ignore.workspace = true
+image.workspace = true
+rand.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+markdown.workspace = true
+unicode-normalization.workspace = true
+url.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

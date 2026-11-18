@@ -1,166 +1,149 @@
-name: Release
+name: Release packages
 
+# Builds qt (GUI) + qt-cli and packages them per platform. The packages are
+# uploaded as workflow artifacts only; publishing a GitHub release from them
+# is a manual step.
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag to create or update"
-        required: true
-        type: string
-      prerelease:
-        description: "Mark release as prerelease"
+      llama_backends:
+        description: >-
+          QT_LLAMA_GPU_BACKENDS for the Linux and Windows builds (cpu, vulkan, ...).
+          macOS always uses auto (Metal).
         required: false
-        default: false
-        type: boolean
+        default: cpu
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  QT_LLAMA_BUILD_JOBS: "2"
-  QT_RELEASE_ARTIFACT: "qt-linux-x86_64"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  QT_LLAMA_REQUIRE: "1"
+  CARGO_PACKAGER_VERSION: "0.11.8"
 
 jobs:
-  build-unified:
-    name: release-unified-gpu
-    runs-on: ubuntu-24.04
-    timeout-minutes: 240
-    container:
-      image: rocm/dev-ubuntu-22.04:6.2.3
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 keeps the glibc floor of the tarball/AppImage low.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            backends: linux
+          - name: macos-arm64
+            os: macos-14
+            backends: macos
+          - name: windows-x86_64
+            os: windows-2022
+            backends: windows
     steps:
-      - name: Install checkout dependencies
-        shell: bash
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates \
-            git
-
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install CUDA, Vulkan, and native build dependencies
+      - name: Select llama.cpp backends
         shell: bash
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential \
-            ca-certificates \
-            ccache \
-            cmake \
-            curl \
-            git \
-            gnupg \
-            glslc \
-            libtinfo-dev \
-            libunistring-dev \
-            libvulkan-dev \
-            ninja-build \
-            python3 \
-            python3-pip \
-            python3-venv \
-            spirv-headers \
-            vulkan-tools \
-            wget \
-            zlib1g-dev
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-          dpkg -i cuda-keyring_1.1-1_all.deb
-          apt-get update
-          apt-get install -y --no-install-recommends cuda-toolkit-12-4
-
-      - name: Install PlatformIO
-        shell: bash
-        run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/pip install platformio
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Build unified app
         env:
-          LD_LIBRARY_PATH: /usr/local/cuda/lib64:/opt/rocm/lib:/opt/rocm/lib64
-          ROCM_PATH: /opt/rocm
+          # Passed through the environment, never interpolated into the script.
+          REQUESTED_BACKENDS: ${{ github.event.inputs.llama_backends }}
+          PLATFORM: ${{ matrix.backends }}
         run: |
-          export PATH="/usr/local/cuda/bin:/opt/rocm/bin:${PATH}"
-          pio run -e native_full
+          if [ "$PLATFORM" = macos ]; then
+            backends=auto
+          else
+            backends="${REQUESTED_BACKENDS:-cpu}"
+          fi
+          case "$backends" in
+            *[!a-z0-9,]*) echo "invalid llama_backends: $backends" >&2; exit 1 ;;
+          esac
+          # qt-llama-sys already configures GGML_NATIVE=OFF, so the CPU
+          # backend is portable across x86-64 / arm64 machines.
+          echo "QT_LLAMA_GPU_BACKENDS=$backends" >> "$GITHUB_ENV"
 
-      - name: Inspect compiled llama backends
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake ninja-build clang libclang-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+            libx11-xcb-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            libssl-dev libzstd-dev file desktop-file-utils
+          if [ "$QT_LLAMA_GPU_BACKENDS" != cpu ]; then
+            # Vulkan backend: SPIR-V headers and the glslc shader compiler.
+            sudo apt-get install -y --no-install-recommends spirv-headers glslang-tools
+            sudo apt-get install -y --no-install-recommends glslc || true
+          fi
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Point bindgen at the runner's LLVM
+        if: runner.os == 'Windows'
         shell: bash
-        run: |
-          find .pio/build/native_full/llama.cpp -maxdepth 6 -type f \
-            \( -name 'libllama.a' -o -name 'libggml*.a' \) | sort
-          grep -E 'GGML_(CUDA|HIP|VULKAN|OPENCL|SYCL|METAL):' \
-            .pio/build/native_full/llama.cpp/CMakeCache.txt
-          grep -q 'GGML_CUDA:BOOL=ON' .pio/build/native_full/llama.cpp/CMakeCache.txt
-          grep -q 'GGML_HIP:BOOL=ON' .pio/build/native_full/llama.cpp/CMakeCache.txt
-          grep -q 'GGML_VULKAN:BOOL=ON' .pio/build/native_full/llama.cpp/CMakeCache.txt
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
 
-      - name: Package release asset
-        shell: bash
-        run: |
-          mkdir -p "dist/${QT_RELEASE_ARTIFACT}"
-          cp .pio/build/native_full/qt "dist/${QT_RELEASE_ARTIFACT}/qt"
-          cp README.md docs/dependencies.md "dist/${QT_RELEASE_ARTIFACT}/"
-          tar -C dist -czf "${QT_RELEASE_ARTIFACT}.tar.gz" "${QT_RELEASE_ARTIFACT}"
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: ${{ env.QT_RELEASE_ARTIFACT }}
-          path: ${{ env.QT_RELEASE_ARTIFACT }}.tar.gz
+          shared-key: release-${{ matrix.name }}
+          cache-on-failure: true
+
+      - name: Install cargo-packager
+        shell: bash
+        run: |
+          if ! cargo packager --version 2>/dev/null | grep -q "$CARGO_PACKAGER_VERSION"; then
+            cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked --force
+          fi
+
+      - name: Build and package
+        shell: bash
+        env:
+          # linuxdeploy and its plugins run without FUSE on the runner.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: packaging/scripts/package.sh
+
+      - name: Smoke-test the packaged qt-cli
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              tar -xzf target/dist/qt-*.tar.gz -C "$RUNNER_TEMP"
+              "$RUNNER_TEMP"/qt-*/bin/qt-cli --version
+              chmod +x target/dist/*.AppImage
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE"/target/dist/*.AppImage --appimage-extract >/dev/null)
+              test -x "$RUNNER_TEMP/squashfs-root/usr/bin/qt"
+              test -x "$RUNNER_TEMP/squashfs-root/usr/bin/qt-cli"
+              "$RUNNER_TEMP/squashfs-root/usr/bin/qt-cli" --version
+              desktop-file-validate "$RUNNER_TEMP/squashfs-root/usr/share/applications/qt.desktop"
+              ;;
+            macOS)
+              ditto -x -k target/dist/qt-*.app.zip "$RUNNER_TEMP/app"
+              "$RUNNER_TEMP"/app/*.app/Contents/MacOS/qt-cli --version
+              ;;
+            Windows)
+              7z x -y -o"$RUNNER_TEMP/zip" target/dist/qt-*.zip >/dev/null
+              "$RUNNER_TEMP"/zip/qt-*/qt-cli.exe --version
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qt-${{ matrix.name }}
+          path: target/dist/*
           if-no-files-found: error
-
-  publish:
-    name: publish-release
-    runs-on: ubuntu-24.04
-    needs:
-      - build-unified
-    steps:
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          cd dist
-          sha256sum *.tar.gz > SHA256SUMS
-
-      - name: Resolve release tag
-        id: release
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
-        run: |
-          flags=()
-          if [ "$PRERELEASE" = "true" ]; then
-            flags+=(--prerelease)
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS --clobber
-          else
-            gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS \
-              --title "$RELEASE_TAG" \
-              --notes "Native qt release with CPU, CUDA, Vulkan, and HIP support in one app." \
-              "${flags[@]}"
-          fi
+          retention-days: 14
