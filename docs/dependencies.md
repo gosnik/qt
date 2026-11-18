@@ -76,6 +76,9 @@ from the lists above.
 | --- | --- |
 | `rusqlite` (bundled) | SQLite store at `<agent_home>/memory/memory.sqlite3`; the bundled build provides FTS5 and JSON1, matching the archived schema and migrations without a system SQLite |
 
+`qt-memory` also uses `qt-core` (messages, hooks and the `Tool` trait), `futures`, `tokio`
+(blocking tool execution) and `tempfile` (the dense-indexing spool) from the lists above.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including

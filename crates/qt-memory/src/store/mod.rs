@@ -9,6 +9,7 @@
 
 mod maintenance;
 mod memories;
+mod retrieval;
 mod reviews;
 pub mod schema;
 mod state;

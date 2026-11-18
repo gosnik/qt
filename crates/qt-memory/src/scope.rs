@@ -271,7 +271,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
-fn repository_root(cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn repository_root(cwd: &Path) -> Option<PathBuf> {
     let mut path = std::fs::canonicalize(cwd)
         .ok()
         .or_else(|| std::path::absolute(cwd).ok())?;
@@ -288,7 +288,7 @@ fn repository_root(cwd: &Path) -> Option<PathBuf> {
     }
 }
 
-fn git_directory(root: &Path) -> Option<PathBuf> {
+pub(crate) fn git_directory(root: &Path) -> Option<PathBuf> {
     let marker = root.join(".git");
     if marker.is_dir() {
         return Some(marker);
