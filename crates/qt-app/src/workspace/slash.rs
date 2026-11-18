@@ -311,6 +311,7 @@ impl Workspace {
         }
         self.rebuild_model_items(window, cx);
         self.sync_thinking(window, cx);
+        self.refresh_credits(false, cx);
         cx.notify();
     }
 

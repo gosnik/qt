@@ -7,6 +7,7 @@ mod history;
 mod panels;
 mod picker;
 mod slash;
+mod status_line;
 mod subsystems;
 
 use std::collections::VecDeque;
@@ -24,6 +25,7 @@ use qt_core::tools::MutationPolicy;
 use self::completion::parse_bash;
 use self::composer_ui::{BashRun, CompletionPopup};
 use self::history::PromptHistory;
+use self::status_line::StatusLine;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::searchable_list::SearchableVec;
@@ -152,6 +154,8 @@ pub struct Workspace {
     /// Runs started by extensions or subagent completions while another
     /// run was being shown.
     pending_runs: VecDeque<Receiver<AgentEvent>>,
+    /// Status line: git branch, OpenRouter credits, review poll state.
+    status: StatusLine,
     _event_task: Option<Task<()>>,
     _ticker: Option<Task<()>>,
     _editor_task: Option<Task<()>>,
@@ -272,6 +276,7 @@ impl Workspace {
             pending_mutations: 0,
             ext,
             pending_runs: VecDeque::new(),
+            status: StatusLine::default(),
             _event_task: None,
             _ticker: None,
             _editor_task: None,
@@ -283,6 +288,7 @@ impl Workspace {
         this.refresh_models(window, cx);
         this.watch_model_refresh(window, cx);
         this.reload_history(window, cx);
+        this.start_status_line(window, cx);
         this.composer
             .update(cx, |state, cx| state.focus(window, cx));
         this
@@ -842,6 +848,7 @@ impl Workspace {
         self.reload_transcript(cx);
         self.rebuild_model_items(window, cx);
         self.sync_thinking(window, cx);
+        self.refresh_credits(false, cx);
         self.sessions = self.engine.sessions();
         self.composer
             .update(cx, |state, cx| state.focus(window, cx));
@@ -1268,6 +1275,8 @@ impl Workspace {
         self.transcript
             .update(cx, |t, cx| t.set_hide_thinking(hide, cx));
         self.rebuild_model_items(window, cx);
+        // `terminal.promptHistoryLimit` may have changed.
+        self.reload_history(window, cx);
         cx.notify();
     }
 
@@ -1662,6 +1671,35 @@ impl Workspace {
             .child(hint)
     }
 
+    /// Archived footer: `~/dir (branch) • session` on the left, `(provider)
+    /// model • thinking • credits` on the right.
+    fn render_status_line(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        h_flex()
+            .id("status-line")
+            .w_full()
+            .gap_3()
+            .items_center()
+            .text_xs()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_color(theme.success)
+                    .child(self.path_status_text()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_color(theme.info)
+                    .child(self.model_status_text()),
+            )
+    }
+
     fn render_activity(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let activity = self.activity.as_ref()?;
         let theme = cx.theme().clone();
@@ -1829,6 +1867,7 @@ impl Workspace {
                             }))
                             .child(self.render_composer_box(textarea, action, cx)),
                     )
+                    .child(self.render_status_line(cx))
                     .child(self.render_status(cx))
                     .children(self.ext.read(cx).render_footer(cx)),
             )

@@ -1039,8 +1039,11 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
 - **Settings:** the archived `/settings` toggles that apply to a desktop app (quietStartup,
   collapseChangelog, hideThinkingBlock, enableSkillCommands, allowExternalFilesystemAccess,
   images.autoResize) plus auto-compaction, auto-retry, steeringMode/followUpMode, the theme
-  and scoped models. The archived terminal-only toggles (terminal progress, tool-entry
-  compaction) are omitted and the prompt-history limit belongs to the prompt history work.
+  and scoped models, and the archived prompt history limit (`terminal.promptHistoryLimit`,
+  choices 0/50/100/250/500/1000/5000, "Maximum prompts retained in the global qt history";
+  the composer history reloads and `history.jsonl` is compacted to the new limit, 0 deletes
+  it). The archived terminal-only toggles (terminal progress, tool-entry compaction) are
+  omitted.
   `enabledModels` accepts exact `provider/id` specs, bare ids and `*` globs (Pi) and limits
   the model picker; toggling from "all" first expands to every discovered model (archived
   `/scoped-models`, which opens Settings scrolled to this section with its filter focused).
@@ -1094,7 +1097,36 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   and 8 MiB. Up in an empty composer, or on the first line while browsing, shows older
   entries; Down on the last line goes back to newer entries and finally the unsent draft;
   editing ends browsing. Every submitted line (prompts, slash commands, `!` commands) is
-  recorded in the session history and appended to `history.jsonl`.
+  recorded in the session history and appended to `history.jsonl`. The session history is
+  the session header's `promptHistory` array (newest first, archived qt; Pi ignores unknown
+  header fields). Once the session file exists the header is rewritten on each submission
+  (off the UI thread); before the first assistant message it is kept in memory like every
+  other entry. The archived binary appended a further `session` metadata line instead; such
+  lines are read (latest wins) and dropped on the next rewrite. Unlike the archived editor,
+  only the session's own lines are stored, not the merged global history. Sessions without
+  `promptHistory` (Pi files, older qt sessions) fall back to their user messages.
+- **Status line:** under the composer, the archived footer: `~/dir (branch) • session name`
+  on the left and `(provider) model • thinking • credits` on the right (provider only when
+  models of more than one provider are available, thinking only for reasoning models).
+  Git HEAD (including `gitdir:` worktrees, `detached` for a commit) is re-read every 2 s on
+  the engine's blocking pool (the archived TUI polled every 500 ms from its input loop).
+  OpenRouter credits (`credits $X`, two decimals below $10, `credits unavailable` without a
+  key or on failure) show while an OpenRouter model is selected, refresh every five minutes
+  and immediately when an OpenRouter model becomes current; `--offline` hides them. Token
+  and context figures stay on the existing usage row.
+- **Startup diagnostics** (`Runtime::diagnostics`) are shown as warning notifications when
+  the window opens (at most five, then a count); they are still printed to stderr.
+- **Memory review notification:** with memory enabled, every 5 s while idle (no run or `!`
+  command, empty composer, no dialog) the pending + due-deferred review count is read off
+  the UI thread; growth since the last poll shows "Memory review: N new/due item(s). Open
+  /memory review." (archived wording and de-duplication; the startup count is the baseline,
+  read failures are ignored).
+- **Compaction markers:** the transcript is rebuilt from the session context, so reloaded
+  sessions show `[compaction]` and `[branch]` summaries. Besides runs the view pumps, a
+  `SessionEvent::Compact`/`Tree` for the current session while idle (for example an
+  extension's `ctx.compact()` from an `input` hook) reloads the transcript live. An
+  extension command calling `ctx.compact()` still fails in the extension runtime with
+  "extension runtime invocation is reentrant" (qt-extensions, not the GUI).
 - **`@` mentions:** `@` at a token start opens path completion over the workspace with the
   archived scoring (exact name, name prefix, substring, path substring, fuzzy; directories
   first on ties), using a `.gitignore`-aware walk with hidden files and without `.git` (the
