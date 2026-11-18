@@ -803,6 +803,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.to_string(), "OAuth state mismatch");
 
+        // A fresh port: the first login's port may already be reused by a
+        // test running in parallel.
+        endpoints.callback_port = free_port().await;
         let mut options = LoginOptions::new(|_| {});
         options.endpoints = Some(endpoints);
         options.cancel.cancel();
