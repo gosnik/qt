@@ -678,3 +678,67 @@ Pi's subagent extension example supplies the child JSON contract.
     output lines) instead of JSON snapshots.
   - Cancellation kills the child's process group (the Linux descendant walk across
     process groups is not ported). A persistent `wait` ends when the parent aborts.
+
+## Desktop GUI (`qt-app`)
+
+The archived interactive (TUI) features are GPUI views; terminal rendering itself is out of scope.
+
+- **Themes:** Pi JSON themes (built-in `dark`/`light` and files from `<agent home>/themes`,
+  `.pi/themes`, `.agents/themes`, `themeRoots`/`themes`) are selected by the `theme` settings
+  key (project `.pi/settings.json` overrides global). Without it the legacy `gui.theme`
+  (`light`/`dark`) is honoured, otherwise the built-in theme matching the system appearance is
+  used and follows appearance changes. Pi themes have no background token, so the HTML-export
+  `pageBg`/`cardBg` give the window and panel backgrounds and decide light/dark mode (then
+  `userMessageBg`, then `text`). Tokens map onto gpui-component colours (`accent` → primary,
+  ring, caret; `borderMuted` → borders; `selectedBg` → list/selection; `userMessageBg` →
+  secondary; `success`/`error`/`warning`; `mdLink` → links); the rest (tool backgrounds,
+  diff colours, thinking text, custom-message colours) colour the transcript. The selected
+  custom theme file is watched (`ThemeWatcher`, 100 ms debounce) and re-applied live. The
+  theme picker is in Settings; the sidebar sun/moon button switches between `dark` and
+  `light` and stores `theme`.
+- **Login / logout:** one dialog replaces the archived `/login` and `/logout` selectors and
+  the former API-keys dialog. Subscriptions (Anthropic Claude Pro/Max, ChatGPT Codex) run
+  the core OAuth flow: the browser opens with the authorization URL, the localhost callback
+  is awaited, and a pasted code or redirect URL can be submitted instead. Statuses and
+  messages use the archived wording (`subscription configured`, `API key configured`,
+  `env: VAR`, `key in models.json`, `unconfigured`, "Saved API key for X. Credentials saved
+  to …", "Logged out of X", "Removed stored API key for X. Environment variables and
+  models.json config are unchanged.", "API key cannot be empty"). Every catalog provider
+  that takes a key is listed (not only Anthropic/OpenAI/OpenRouter).
+- **Ollama:** one panel covers `/ollama` instances/add/configure/remove/status/models/
+  running/info/pull/load/unload/delete with the archived result lines. Remove and delete ask
+  for confirmation instead of `--yes`. The implicit `local` instance is written to settings
+  the first time its models are refreshed. Pull is non-streaming (as in the archived qt); the
+  panel shows a busy indicator until it finishes.
+- **Sessions:** the tree view (`/tree`) offers Pi's filter modes (default, no tools, user
+  only, labeled, all) and search, marks the active path and current position, edits labels,
+  and navigates with Pi's "Summarize branch?" choice (No summary / Summarize / Summarize with
+  custom prompt; `branchSummary.skipPrompt` skips it) plus an optional label; Esc cancels a
+  running summary. Fork (`/fork`) is available from a picker, the tree and a hover button on
+  user messages; the selected text seeds the composer. Clone copies the whole session
+  (`clone-<id>`). The resume picker searches name, messages, id and folder across the
+  current folder or all sessions and renames sessions. Import asks "Replace current session
+  with <path>?" and resuming or importing a session whose stored cwd is gone shows Pi's
+  "Session cwd not found" prompt (Continue/Cancel). The transcript reloads after compaction
+  and tree navigation and renders compaction (`[compaction] Compacted from N tokens`), branch
+  summary (`[branch]`) and displayed custom messages (`[customType]`).
+- **Run controls:** Enter while running steers, Alt+Enter queues a follow-up, Alt+Up (or the
+  queue's button) restores queued messages to the composer (queued first, then the draft,
+  as Pi). Queued messages are listed above the composer. Compaction and retry show progress
+  (retry with a countdown) and can be cancelled. Manual compaction takes optional
+  instructions. The goal dialog sets, updates, pauses, resumes, clears and shows the goal;
+  the status bar shows its state, time and token budget.
+- **Settings:** the archived `/settings` toggles that apply to a desktop app (quietStartup,
+  collapseChangelog, hideThinkingBlock, enableSkillCommands, allowExternalFilesystemAccess,
+  images.autoResize) plus auto-compaction, auto-retry, steeringMode/followUpMode, the theme
+  and scoped models. The archived terminal-only toggles (terminal progress, tool-entry
+  compaction) are omitted and the prompt-history limit belongs to the prompt history work.
+  `enabledModels` accepts exact `provider/id` specs, bare ids and `*` globs (Pi) and limits
+  the model picker; toggling from "all" first expands to every discovered model (archived
+  `/scoped-models`). The thinking picker offers the selected model's levels and clamps the
+  current level (upwards first, Pi).
+- **Composer:** clipboard images and dropped image files become attachments (chips with
+  size and dimensions) prepared with `images.autoResize`; Pi's resize note is appended to the
+  prompt text. Dropped non-image files insert their paths. Ctrl+G edits the draft in
+  `$VISUAL`/`$EDITOR` (Pi's "No editor configured" message; one trailing newline removed);
+  GUI editors need a blocking flag such as `code --wait`.
