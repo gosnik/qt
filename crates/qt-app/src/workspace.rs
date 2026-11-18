@@ -1332,6 +1332,22 @@ impl Workspace {
                             })),
                     )
                     .child(
+                        Button::new("memory")
+                            .icon(IconName::BookOpen)
+                            .ghost()
+                            .small()
+                            .tooltip("Memory (/memory)")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let host = this.memory_host(cx);
+                                crate::memory::open_panel(
+                                    host,
+                                    crate::memory::Section::Status,
+                                    window,
+                                    cx,
+                                )
+                            })),
+                    )
+                    .child(
                         Button::new("settings")
                             .icon(IconName::Settings)
                             .ghost()

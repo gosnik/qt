@@ -7,6 +7,7 @@
 mod composer;
 mod dialogs;
 mod login;
+mod memory;
 mod model_picker;
 mod ollama_panel;
 mod run_status;

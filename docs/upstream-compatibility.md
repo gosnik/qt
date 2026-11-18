@@ -369,8 +369,9 @@ Pi has no persistent-memory contract; the archived qt is the reference.
   - Lenient JSON readers: a field of the wrong type in an imported document falls back to
     its default instead of aborting the import.
 - **Wiring:** recall, capture, the memory tools, Dreaming and the `qt-cli memory` command are
-  wired by `qt-runtime` (see the composition-root section). The GUI `/memory` panel and the
-  native dashboard are not built yet.
+  wired by `qt-runtime` (see the composition-root section). The GUI `/memory` panel, Review
+  Inbox, settings editor and native dashboard are described in "Governed memory in the
+  desktop app" below.
 
 ## Core integration (`qt-core` engine, settings, slash commands, export, events)
 
@@ -912,7 +913,8 @@ The archived interactive (TUI) features are GPUI views; terminal rendering itsel
   open the existing views: settings (and a theme picker for `/settings theme` and `/themes`),
   a searchable model picker, a thinking picker, tree, resume, fork picker, login, Ollama,
   import (with the missing-cwd prompt) and quit (`/exit` too, archived alias). `/name` without
-  arguments opens the rename dialog. `/llama`, `/memory`, `/index`, `/mcp`, `/subagent`,
+  arguments opens the rename dialog. `/memory` runs through the memory views (see "Governed
+  memory in the desktop app"). `/llama`, `/index`, `/mcp`, `/subagent`,
   `/extensions`, `/skills`, `/prompts` and extension commands show "… is not available in this
   build." until their panels and the extension runtime are wired. An unknown `/name` is an
   error card (archived); a first word containing `/` (a path) is sent as a prompt.
@@ -970,3 +972,72 @@ Rust port adds:
   llama.cpp build script now finds `cmake.exe` / `ninja.exe` on `PATH`.
 - Not provided: code signing and notarization (macOS, Windows), Flatpak, a universal or
   x86-64 macOS build, and automatic GitHub release publishing.
+
+## Governed memory in the desktop app (`qt-app` memory views)
+
+The archived `/memory` handler and `ReviewInboxController` (`interactive_mode.cpp`), the
+memory settings list, `memory_dashboard_server.cpp` and the ImGui/WASM dashboard
+(`dashboard_wasm/src/main.cpp`) are the reference. View logic lives in `qt_memory::views`
+(UI-agnostic, unit-tested); `crates/qt-app/src/memory/` lays it out.
+
+- **`/memory` panel:** `/memory` (or the sidebar book button) opens the archived menu (status,
+  settings, dashboard, scan skills folder, dream, recall, remember, review, feedback,
+  forget) as a dialog with one form per operation. Operations run the `/memory` subcommands
+  through `qt_memory::slash` on the engine runtime; output shows in the panel and as a
+  transcript card (archived transcript lines). Feedback and forget ask for confirmation
+  instead of the trailing `confirm` word. `/memory <sub> …` typed in the composer runs the
+  same handler; view actions open the views below. `status` re-reads the saved memory
+  settings, as the archived app updated its in-memory settings after an edit.
+- **Skill scan:** a folder browser (workspace containment unless external access is
+  allowed; `..`, subfolders, "Scan this folder" / "+ subfolders") starts the import on a
+  background thread; progress lines (archived wording) stream into the panel and the summary
+  becomes a transcript card. One scan runs at a time.
+- **Settings editor:** every archived `memory.*` key with its label, description, choices and
+  bounds (archived "whole number between 1 and N" and "invalid memory setting value"
+  messages, verifier "cannot be auto"); model pickers list discovered models plus configured
+  local llama.cpp models, the verifier picker only `llama/` models (with the archived "no
+  local models configured; add one with /llama" heading). Each change is validated with the
+  settings rules and written to global settings at once; closing the editor after a change
+  reports "Memory settings saved; changes apply to the next runtime." Difference: the editor
+  starts from and writes the global layer only, so a narrowing project layer is never copied
+  into global settings (the archived editor wrote the merged values).
+- **Review Inbox:** landing summary, resume / clear saved filters, Review next, Browse pending,
+  Batch, Latest Dream, Deferred, History and Memory status; filters by status preset, kind,
+  priority, scope selector (all/exact/durable, an RPC filter the TUI did not expose), tags and
+  ordering. Queue cards, detail lines, the default-outcome acceptance preview, blocking
+  diagnostics, the per-kind action catalogue and labels, the edit-and-approve field rules
+  (general: type, target status, tags, confidence, replacement; procedure revision: tags,
+  confidence, replacement; others: content only), the inputs each action collects (content,
+  evidence URI, defer choice, surviving memory, note), preview → confirm → apply, receipts,
+  the Source Inspector (workspace-permitted local evidence, first 8 KiB, secrets redacted),
+  history filters and receipts, and the persisted view state / queue position follow the
+  archive. Keys A/E/R/D/S and ↑/↓ work when the inbox has focus. Differences: batches run as
+  a background job with a progress line (the archived TUI applied them synchronously);
+  surviving-memory choices list a memory once even when it is both source and subject.
+- **Dashboard window:** a separate native window (one at a time; reopening focuses it) with
+  Overview (health score with the archived penalties, entries, conflicts, pending staleness
+  reviews as "Stale", pending reviews, memory mix, trust states, urgent signals, statistics),
+  Explore (search, type/status filters, include superseded, detail with every archived field,
+  revision history, Promote/Deprecate/Reject, Validate refused with the archived message,
+  governed Dream review preview → confirm for Dream-derived memories, Forget with
+  confirmation), Graph (archived ring layout over connected components, wheel zoom,
+  right-drag pan, fit, edge-type filter, node selection), Sources (records and events),
+  Sessions & Agents, Context pack (query, budget 1–16000, policy, global-user toggle,
+  per-item explanation, recalled memories, rendered markdown; nothing is recorded as
+  accessed), Capture (write capped at candidate/hypothesis; raw-text processing with dry
+  run), Operations (retrieval status, confirmed rebuild, Dreaming status and run) and Logs &
+  System (schema, database, scope, audit log). Blocking store work (context build, rebuild,
+  raw-text processing, recall) runs off the UI thread. Differences from the browser
+  dashboard: no HTTP server, token or browser; Logs show the store's audit events (the
+  archived `/mcp/logs` was always empty); sources, source events and audit events merge the
+  exact and durable scopes, and lifecycle transitions of durable memories use the durable
+  scope as their authority (the archived dashboard refused every memory outside the exact
+  session scope); Forget in the dashboard deletes after confirmation instead of pointing at
+  `/memory forget`; scheduler start/stop and AI-config windows (not implemented by the
+  archived native server) are omitted.
+- **Disabled memory:** the panel shows the archived "disabled for this runtime" notice and
+  status; review, dashboard and scan report the archived "Built-in memory is disabled.
+  Enable it in /memory settings and start a new runtime before …" lines.
+- **Core fix:** `qt_core::harness::Hooks` no longer holds its table lock while running hooks,
+  so a hook may register hooks; previously starting the app with `memory.enabled` deadlocked
+  when the runtime attached memory from the `conversation created` hook.

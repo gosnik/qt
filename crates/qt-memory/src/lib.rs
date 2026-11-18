@@ -19,6 +19,8 @@
 //! - [`dreaming`], [`research`], [`verifier`] and [`post_processing`]: governed
 //!   Dreaming, restricted web research, the `auto_validate` evidence verifier
 //!   and review-only post-processing / semantic consolidation.
+//! - [`views`]: view models of the GUI `/memory` panel, Review Inbox,
+//!   settings editor and dashboard.
 //!
 //! The crate is UI-agnostic. Store and service calls are synchronous;
 //! callers on an async runtime run them on a blocking thread (the tools do).
@@ -76,6 +78,7 @@ pub mod store;
 pub mod text;
 pub mod tools;
 pub mod verifier;
+pub mod views;
 
 pub use context::{ContextOptions, ContextPack, ContextService};
 pub use coordinator::{MemoryAugmentation, MemoryCoordinator, MemoryCoordinatorSettings};
