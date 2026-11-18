@@ -9,6 +9,7 @@ pub mod agent;
 pub mod config;
 pub mod engine;
 pub mod message;
+pub mod policy;
 pub mod prompt;
 pub mod provider;
 pub mod session;

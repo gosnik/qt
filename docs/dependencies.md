@@ -22,6 +22,8 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `dirs` | Home directory lookup |
 | `ignore`, `globset`, `regex` | `.gitignore`-aware `grep`/`find`, glob and regex matching |
 | `similar` | Unified diffs for `edit` results |
+| `unicode-normalization` | NFKC folding for the `edit` fuzzy-match fallback (Pi's `normalizeForFuzzyMatch`) |
+| `url` | URL parsing, redirect resolution and host classification for the web tools (already a `reqwest` dependency) |
 | `base64` | Image attachments |
 | `rand` | Session entry ids |
 | `libc` (unix) | Killing a bash process group on timeout or abort |
