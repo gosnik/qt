@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -76,6 +77,19 @@ enum Item {
         state: Entity<TextViewState>,
     },
     Bash(BashExecutionMessage),
+    /// A user `!command` that is still running.
+    BashLive {
+        id: u64,
+        command: String,
+        exclude: bool,
+        output: String,
+    },
+    /// Slash command output (`/help`, `/session`, ...).
+    Card {
+        title: SharedString,
+        state: Entity<TextViewState>,
+        error: bool,
+    },
     Error(SharedString),
     Notice(SharedString),
 }
@@ -97,6 +111,7 @@ pub struct Transcript {
     tool_items: HashMap<String, usize>,
     cwd: PathBuf,
     hide_thinking: bool,
+    next_bash_id: u64,
     _observers: Vec<Subscription>,
 }
 
@@ -109,7 +124,64 @@ impl Transcript {
             tool_items: HashMap::new(),
             cwd: cwd.to_path_buf(),
             hide_thinking: false,
+            next_bash_id: 0,
             _observers: Vec::new(),
+        }
+    }
+
+    /// Show slash command output as a card at the end of the transcript.
+    pub fn push_card(
+        &mut self,
+        title: impl Into<SharedString>,
+        lines: &[String],
+        error: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let state = self.markdown_state(&card_markdown(lines), cx);
+        self.items.push(Item::Card {
+            title: title.into(),
+            state,
+            error,
+        });
+        self.appended(1, cx);
+        self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
+    }
+
+    /// Add a running `!command` card; returns its id for updates.
+    pub fn begin_bash(&mut self, command: &str, exclude: bool, cx: &mut Context<Self>) -> u64 {
+        self.next_bash_id += 1;
+        let id = self.next_bash_id;
+        self.items.push(Item::BashLive {
+            id,
+            command: command.to_string(),
+            exclude,
+            output: String::new(),
+        });
+        self.appended(1, cx);
+        self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
+        id
+    }
+
+    fn bash_index(&self, wanted: u64) -> Option<usize> {
+        self.items
+            .iter()
+            .position(|item| matches!(item, Item::BashLive { id, .. } if *id == wanted))
+    }
+
+    /// Replace the live output tail of a running `!command`.
+    pub fn update_bash(&mut self, id: u64, tail: String, cx: &mut Context<Self>) {
+        let index = self.bash_index(id);
+        if let Some(Item::BashLive { output, .. }) = index.and_then(|i| self.items.get_mut(i)) {
+            *output = tail;
+        }
+        self.changed(index, cx);
+    }
+
+    /// Turn a live `!command` card into its recorded result.
+    pub fn finish_bash(&mut self, id: u64, message: BashExecutionMessage, cx: &mut Context<Self>) {
+        if let Some(index) = self.bash_index(id) {
+            self.items[index] = Item::Bash(message);
+            self.changed(Some(index), cx);
         }
     }
 
@@ -680,54 +752,79 @@ impl Transcript {
                 } else if let Some(code) = bash.exit_code.filter(|c| *c != 0) {
                     status.push(format!("Command exited with code {code}"));
                 }
+                if bash.truncated
+                    && let Some(path) = &bash.full_output_path
+                {
+                    status.push(format!("Output truncated. Full output: {path}"));
+                }
                 if bash.exclude_from_context {
                     status.push("not sent to the model".into());
                 }
-                v_flex()
-                    .w_full()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .overflow_hidden()
-                    .child(
-                        h_flex()
-                            .px_3()
-                            .py_1p5()
-                            .gap_2()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_sm()
-                            .child(Icon::new(IconName::SquareTerminal).small())
-                            .child(format!("$ {}", bash.command)),
-                    )
-                    .child(
-                        div()
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .child(render_output(
-                                if bash.output.is_empty() {
-                                    "(no output)"
-                                } else {
-                                    &bash.output
-                                },
-                                PREVIEW_LINES * 2,
-                                true,
-                                0,
-                                &theme,
-                                palette.tool_output,
-                            )),
-                    )
-                    .when(!status.is_empty(), |el| {
-                        el.child(
-                            div()
-                                .px_3()
-                                .pb_1p5()
-                                .text_xs()
-                                .text_color(palette.warning)
-                                .child(status.join(" · ")),
-                        )
-                    })
-                    .into_any_element()
+                render_bash(
+                    &bash.command,
+                    &bash.output,
+                    &status,
+                    false,
+                    &theme,
+                    &palette,
+                )
             }
+            Item::BashLive {
+                command,
+                exclude,
+                output,
+                ..
+            } => {
+                let mut status = vec!["Running… (Esc to cancel)".to_string()];
+                if *exclude {
+                    status.push("not sent to the model".into());
+                }
+                render_bash(command, output, &status, true, &theme, &palette)
+            }
+            Item::Card {
+                title,
+                state,
+                error,
+            } => v_flex()
+                .w_full()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .border_1()
+                .border_color(if *error { theme.danger } else { theme.border })
+                .bg(theme.muted.opacity(0.3))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if *error {
+                            theme.danger
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(
+                            Icon::new(if *error {
+                                IconName::TriangleAlert
+                            } else {
+                                IconName::Info
+                            })
+                            .xsmall(),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(title.clone()),
+                        ),
+                )
+                .child(div().text_sm().child(TextView::new(state).selectable(true)))
+                .into_any_element(),
             Item::Error(message) => h_flex()
                 .w_full()
                 .gap_2()
@@ -969,6 +1066,79 @@ fn render_output(
     col.into_any_element()
 }
 
+/// Card body: the output lines in a fenced block that no line can close.
+pub fn card_markdown(lines: &[String]) -> String {
+    let body = lines.join("\n");
+    let mut longest = 0;
+    let mut run = 0;
+    for c in body.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!("{fence}text\n{body}\n{fence}")
+}
+
+fn render_bash(
+    command: &str,
+    output: &str,
+    status: &[String],
+    running: bool,
+    theme: &component::Theme,
+    palette: &QtPalette,
+) -> AnyElement {
+    let shown = match (output.is_empty(), running) {
+        (false, _) => output,
+        (true, true) => "",
+        (true, false) => "(no output)",
+    };
+    v_flex()
+        .w_full()
+        .rounded_md()
+        .border_1()
+        .border_color(theme.border)
+        .overflow_hidden()
+        .child(
+            h_flex()
+                .px_3()
+                .py_1p5()
+                .gap_2()
+                .font_family(theme.mono_font_family.clone())
+                .text_sm()
+                .child(Icon::new(IconName::SquareTerminal).small())
+                .child(div().flex_1().child(format!("$ {command}")))
+                .when(running, |el| el.child(Spinner::new().xsmall())),
+        )
+        .child(
+            div()
+                .border_t_1()
+                .border_color(theme.border)
+                .child(render_output(
+                    shown,
+                    PREVIEW_LINES * 2,
+                    true,
+                    0,
+                    theme,
+                    palette.tool_output,
+                )),
+        )
+        .when(!status.is_empty(), |el| {
+            el.child(
+                div()
+                    .px_3()
+                    .pb_1p5()
+                    .text_xs()
+                    .text_color(palette.warning)
+                    .child(status.join(" · ")),
+            )
+        })
+        .into_any_element()
+}
+
 /// Short description of a tool call for its card header.
 fn tool_summary(name: &str, args: &Value, cwd: &Path) -> SharedString {
     let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or_default();
@@ -1045,7 +1215,7 @@ impl Render for Transcript {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the gpui glob import would shadow `#[test]`.
-    use super::{group_thousands, tool_summary};
+    use super::{card_markdown, group_thousands, tool_summary};
     use serde_json::json;
     use std::path::Path;
 
@@ -1069,6 +1239,18 @@ mod tests {
             "fn in src"
         );
         assert_eq!(tool_summary("ls", &json!({}), cwd).as_ref(), ".");
+    }
+
+    #[test]
+    fn card_fences_cannot_be_closed_by_output() {
+        assert_eq!(
+            card_markdown(&["a".into(), "b".into()]),
+            "```text\na\nb\n```"
+        );
+        assert_eq!(
+            card_markdown(&["```x```".into()]),
+            "````text\n```x```\n````"
+        );
     }
 
     #[test]
