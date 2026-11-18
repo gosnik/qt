@@ -27,6 +27,16 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `libc` (unix) | Killing a bash process group on timeout or abort |
 | `tempfile` (dev) | Test fixtures |
 
+## Project index (`qt-index`)
+
+| Crate | Why |
+| --- | --- |
+| `rusqlite` (bundled) | Index snapshot store with the FTS5 `index_fts` table; bundled SQLite so FTS5 is always compiled in |
+| `tree-sitter`, `tree-sitter-cpp` | In-process C++ parsing for the per-file tree-sitter metadata (replaces the vendored C runtime and grammar) |
+
+`qt-index` also uses `qt-core`, `futures`, `regex`, `serde_json`, `tokio` and `tempfile` (dev)
+from the lists above.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including
