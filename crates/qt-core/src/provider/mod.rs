@@ -222,7 +222,9 @@ pub struct ToolSpec {
 }
 
 /// Everything a provider needs for one completion.
-#[derive(Debug, Clone)]
+///
+/// Construct with `..Default::default()` so new fields stay source-compatible.
+#[derive(Debug, Clone, Default)]
 pub struct Request {
     pub model: String,
     pub system: String,

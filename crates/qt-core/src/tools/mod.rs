@@ -50,6 +50,18 @@ impl ToolContext {
         }
     }
 
+    /// Use `cancel` (typically a child token of the run) for this call.
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    /// Receive live output while the tool runs.
+    pub fn with_progress(mut self, progress: ProgressFn) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
     fn report(&self, text: String) {
         if let Some(progress) = &self.progress {
             progress(text);

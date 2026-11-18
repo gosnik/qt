@@ -134,16 +134,14 @@ pub async fn run_agent(
                 }));
                 let progress_tx = tx.clone();
                 let progress_id = id.clone();
-                let ctx = ToolContext {
-                    cwd: params.cwd.clone(),
-                    cancel: cancel.child_token(),
-                    progress: Some(std::sync::Arc::new(move |output: String| {
+                let ctx = ToolContext::new(params.cwd.clone())
+                    .with_cancel(cancel.child_token())
+                    .with_progress(std::sync::Arc::new(move |output: String| {
                         let _ = progress_tx.try_send(AgentEvent::ToolProgress {
                             id: progress_id.clone(),
                             output,
                         });
-                    })),
-                };
+                    }));
                 let output = params.tools.execute(&name, args, ctx).await;
                 ToolResultMessage {
                     tool_call_id: id,
