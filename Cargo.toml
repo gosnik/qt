@@ -11,6 +11,7 @@ edition = "2024"
 qt-core = { path = "crates/qt-core" }
 qt-llama-sys = { path = "crates/qt-llama-sys" }
 qt-llama = { path = "crates/qt-llama" }
+qt-mcp = { path = "crates/qt-mcp" }
 
 anyhow = "1"
 async-channel = "2"

@@ -1,0 +1,30 @@
+[package]
+name = "qt-mcp"
+description = "Model Context Protocol client for qt: config discovery, transports, proxy tools and sampling"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dirs.workspace = true
+futures.workspace = true
+qt-core.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+# Scripted MCP server used by the integration tests (stdio transport). It is not
+# part of the default workspace members, so it is only built for this crate.
+[[bin]]
+name = "qt-mcp-mock-server"
+path = "tests/support/mock_server.rs"
+test = false
+doc = false
