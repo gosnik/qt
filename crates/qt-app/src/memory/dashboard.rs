@@ -94,6 +94,11 @@ pub struct MemoryDashboard {
     graph: GraphData,
     layout: HashMap<String, NodeLayout>,
     view: GraphView,
+    /// Last laid-out canvas size (width, height).
+    canvas_size: (f32, f32),
+    /// The view is a fit the user has not zoomed or panned since, so it
+    /// is refitted when the canvas is resized.
+    fitted: bool,
     drag: Option<Point<Pixels>>,
     edge_type: Entity<InputState>,
     // Sources
@@ -182,9 +187,11 @@ impl MemoryDashboard {
             layout: HashMap::new(),
             view: GraphView {
                 zoom: 1.0,
-                pan_x: graph::WIDTH * 0.5,
-                pan_y: graph::HEIGHT * 0.5,
+                pan_x: graph::DEFAULT_SIZE.0 * 0.5,
+                pan_y: graph::DEFAULT_SIZE.1 * 0.5,
             },
+            canvas_size: graph::DEFAULT_SIZE,
+            fitted: false,
             drag: None,
             edge_type: input("Edge type filter (blank: all)", window, cx),
             sources: Vec::new(),
@@ -281,7 +288,8 @@ impl MemoryDashboard {
         match data::graph(&self.memory, &self.filter, edge_type, 250) {
             Ok(graph) => {
                 self.layout = data::graph_layout(&graph);
-                self.view = GraphView::fit(&self.layout);
+                self.view = GraphView::fit(&self.layout, self.canvas_size);
+                self.fitted = true;
                 self.graph = graph;
             }
             Err(error) => self.err(format!("Graph failed: {error}")),
@@ -702,6 +710,7 @@ impl MemoryDashboard {
             .child(
                 h_flex()
                     .gap_2()
+                    .flex_wrap()
                     .child(widgets::metric(
                         "Health",
                         summary.health_score.to_string(),
@@ -957,7 +966,8 @@ impl MemoryDashboard {
         let mut table = v_flex()
             .id("dash-memory-table")
             .gap_0p5()
-            .max_h(px(470.))
+            .flex_1()
+            .min_h(px(160.))
             .overflow_y_scroll();
         if self.entries.is_empty() {
             table = table.child(hint(
@@ -987,8 +997,10 @@ impl MemoryDashboard {
             );
         }
         h_flex()
+            .flex_1()
+            .min_h(px(320.))
             .gap_3()
-            .items_start()
+            .items_stretch()
             .child(
                 v_flex()
                     .flex_1()
@@ -1031,9 +1043,11 @@ impl MemoryDashboard {
             .child(
                 div()
                     .id("dash-detail")
-                    .w(px(420.))
+                    .w(relative(0.4))
+                    .min_w(px(240.))
+                    .max_w(px(420.))
                     .flex_none()
-                    .max_h(px(620.))
+                    .min_h_0()
                     .overflow_y_scroll()
                     .child(self.render_detail(cx)),
             )
@@ -1041,8 +1055,26 @@ impl MemoryDashboard {
 
     fn render_graph(&self, cx: &mut Context<Self>) -> Div {
         let this = cx.entity().downgrade();
-        let on_select: graph::SelectNode = Rc::new(move |id, _, cx| {
-            let _ = this.update(cx, |this, cx| this.select_memory(id, cx));
+        let on_select: graph::SelectNode = Rc::new({
+            let this = this.clone();
+            move |id, _, cx| {
+                let _ = this.update(cx, |this, cx| this.select_memory(id, cx));
+            }
+        });
+        // The canvas fills the tab; keep zoom and fit centred on its real
+        // size and refit an untouched fit when the window is resized.
+        let on_resize: graph::CanvasResized = Rc::new(move |size, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                let (w, h) = this.canvas_size;
+                if (w - size.0).abs() < 0.5 && (h - size.1).abs() < 0.5 {
+                    return;
+                }
+                this.canvas_size = size;
+                if this.fitted {
+                    this.view = GraphView::fit(&this.layout, size);
+                    cx.notify();
+                }
+            });
         });
         let canvas = graph::render(
             &self.graph,
@@ -1050,14 +1082,18 @@ impl MemoryDashboard {
             self.view,
             self.selected.as_deref(),
             on_select,
+            on_resize,
             cx,
         );
         let interactive = div()
             .id("dash-graph")
+            .flex_1()
+            .min_h(px(200.))
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                 let delta = event.delta.pixel_delta(px(20.)).y;
                 let notches = f32::from(delta) / 20.0;
-                this.view.zoom_by(notches * 0.08);
+                this.view.zoom_by(notches * 0.08, this.canvas_size);
+                this.fitted = false;
                 cx.notify();
             }))
             .on_mouse_down(
@@ -1077,6 +1113,7 @@ impl MemoryDashboard {
                     let delta = event.position - last;
                     this.view.pan_x += f32::from(delta.x);
                     this.view.pan_y += f32::from(delta.y);
+                    this.fitted = false;
                     this.drag = Some(event.position);
                     cx.notify();
                 }
@@ -1091,16 +1128,19 @@ impl MemoryDashboard {
             .map(|(kind, count)| format!("{kind}={count}"))
             .collect();
         h_flex()
+            .flex_1()
+            .min_h(px(320.))
             .gap_3()
-            .items_start()
+            .items_stretch()
             .child(
                 v_flex()
-                    .w(px(graph::WIDTH))
-                    .flex_none()
+                    .flex_1()
+                    .min_w(px(260.))
                     .gap_2()
                     .child(
                         h_flex()
                             .gap_1()
+                            .flex_wrap()
                             .child(div().w(px(260.)).child(Input::new(&self.edge_type).small()))
                             .child(
                                 Button::new("dash-graph-load")
@@ -1118,7 +1158,9 @@ impl MemoryDashboard {
                                     .label("Fit")
                                     .small()
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.view = GraphView::fit(&this.layout);
+                                        this.view =
+                                            GraphView::fit(&this.layout, this.canvas_size);
+                                        this.fitted = true;
                                         cx.notify();
                                     })),
                             )
@@ -1128,7 +1170,8 @@ impl MemoryDashboard {
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.view.zoom_by(0.16);
+                                        this.view.zoom_by(0.16, this.canvas_size);
+                                        this.fitted = false;
                                         cx.notify();
                                     })),
                             )
@@ -1138,7 +1181,8 @@ impl MemoryDashboard {
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.view.zoom_by(-0.16);
+                                        this.view.zoom_by(-0.16, this.canvas_size);
+                                        this.fitted = false;
                                         cx.notify();
                                     })),
                             ),
@@ -1158,9 +1202,11 @@ impl MemoryDashboard {
             .child(
                 div()
                     .id("dash-graph-detail")
-                    .flex_1()
-                    .min_w(px(320.))
-                    .max_h(px(620.))
+                    .w(relative(0.3))
+                    .min_w(px(240.))
+                    .max_w(px(420.))
+                    .flex_none()
+                    .min_h_0()
                     .overflow_y_scroll()
                     .child(self.render_detail(cx)),
             )
@@ -1170,9 +1216,11 @@ impl MemoryDashboard {
         let mut list = v_flex()
             .id("dash-sources")
             .gap_0p5()
-            .w(px(420.))
+            .w(relative(0.45))
+            .min_w(px(240.))
+            .max_w(px(420.))
             .flex_none()
-            .max_h(px(600.))
+            .min_h_0()
             .overflow_y_scroll();
         if self.sources.is_empty() {
             list = list.child(hint("No sources recorded in this scope yet.", cx));
@@ -1204,7 +1252,13 @@ impl MemoryDashboard {
                 })),
             );
         }
-        let mut detail = v_flex().flex_1().min_w_0().gap_1();
+        let mut detail = v_flex()
+            .id("dash-source-detail")
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap_1()
+            .overflow_y_scroll();
         if let Some(source) = self
             .selected_source
             .as_ref()
@@ -1227,7 +1281,13 @@ impl MemoryDashboard {
                     widgets::lines(&events, false, cx)
                 });
         }
-        h_flex().gap_3().items_start().child(list).child(detail)
+        h_flex()
+            .flex_1()
+            .min_h(px(240.))
+            .gap_3()
+            .items_stretch()
+            .child(list)
+            .child(detail)
     }
 
     fn render_sessions(&self, cx: &mut Context<Self>) -> Div {
@@ -1247,7 +1307,15 @@ impl MemoryDashboard {
                 )),
             );
         }
-        let mut list = v_flex().gap_0p5().w(px(360.)).flex_none();
+        let mut list = v_flex()
+            .id("dash-groups")
+            .gap_0p5()
+            .w(relative(0.4))
+            .min_w(px(220.))
+            .max_w(px(360.))
+            .flex_none()
+            .min_h_0()
+            .overflow_y_scroll();
         for (index, group) in self.groups.iter().enumerate() {
             let id = group.id.clone();
             list = list.child(
@@ -1277,8 +1345,8 @@ impl MemoryDashboard {
             .id("dash-group-members")
             .flex_1()
             .min_w_0()
+            .min_h_0()
             .gap_0p5()
-            .max_h(px(560.))
             .overflow_y_scroll()
             .child(section(format!("MEMORIES ({})", members.len()), cx));
         for (index, memory) in members.iter().enumerate() {
@@ -1304,7 +1372,15 @@ impl MemoryDashboard {
             .when(self.groups.is_empty(), |el| {
                 el.child(hint("No memories in this scope yet.", cx))
             })
-            .child(h_flex().gap_3().items_start().child(list).child(detail))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h(px(200.))
+                    .gap_3()
+                    .items_stretch()
+                    .child(list)
+                    .child(detail),
+            )
     }
 
     fn render_context(&self, cx: &mut Context<Self>) -> Div {
@@ -1399,7 +1475,8 @@ impl MemoryDashboard {
                     .child(
                         Textarea::new(&self.context_markdown)
                             .readonly(true)
-                            .h(px(260.))
+                            .flex_1()
+                            .min_h(px(260.))
                             .font_family(theme.mono_font_family.clone())
                             .text_xs(),
                     );
@@ -1557,9 +1634,11 @@ impl Render for MemoryDashboard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let mut nav = v_flex()
+            .id("dash-nav")
             .w(px(210.))
             .flex_none()
             .h_full()
+            .overflow_y_scroll()
             .p_2()
             .gap_0p5()
             .bg(theme.sidebar)
@@ -1622,13 +1701,11 @@ impl Render for MemoryDashboard {
             .child(nav)
             .child(
                 v_flex()
-                    .id("dash-content")
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .p_4()
                     .gap_3()
-                    .overflow_y_scroll()
                     .child(
                         div()
                             .text_lg()
@@ -1669,7 +1746,17 @@ impl Render for MemoryDashboard {
                                 ),
                         )
                     })
-                    .child(content),
+                    .child(
+                        // The tab fills the window: list tabs scroll their
+                        // own lists, and any tab taller than the window
+                        // scrolls as a whole.
+                        v_flex()
+                            .id("dash-content")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .child(content.flex_1()),
+                    ),
             )
     }
 }
