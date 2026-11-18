@@ -40,6 +40,10 @@ pub struct LlamaProviderBackend {
     extra_models: RwLock<Vec<ModelSettings>>,
     overrides: Option<SettingsOverride>,
     generate_options: GenerateOptions,
+    /// `llama.grammar` provider option set by `/llama grammar inline|file|off`
+    /// for subsequent turns of this process (archived per-session
+    /// `ProviderOptions` metadata).
+    runtime_grammar: Mutex<Option<serde_json::Value>>,
     cached: Mutex<Option<Cached>>,
     diagnostics: Mutex<Vec<String>>,
     /// Settings of the latest `providers` call (the engine's layered
@@ -62,6 +66,7 @@ impl LlamaProviderBackend {
             extra_models: RwLock::new(Vec::new()),
             overrides: None,
             generate_options: GenerateOptions::default(),
+            runtime_grammar: Mutex::new(None),
             cached: Mutex::new(None),
             diagnostics: Mutex::new(Vec::new()),
             last_settings: Mutex::new(None),
@@ -78,6 +83,45 @@ impl LlamaProviderBackend {
     pub fn with_generate_options(mut self, options: GenerateOptions) -> Self {
         self.generate_options = options;
         self
+    }
+
+    /// The runtime grammar override (`{"inline"|"file", "root"}` or
+    /// `{"enabled": false}`), if one is set.
+    pub fn runtime_grammar(&self) -> Option<serde_json::Value> {
+        self.runtime_grammar.lock().expect("grammar lock").clone()
+    }
+
+    /// Set or clear the runtime grammar override applied to every later
+    /// generation (conversation turns, `/llama prompt` and `/llama run`).
+    pub fn set_runtime_grammar(&self, grammar: Option<serde_json::Value>) {
+        *self.runtime_grammar.lock().expect("grammar lock") = grammar;
+    }
+
+    /// The configured generation options with the runtime grammar override
+    /// merged in as `llama.grammar` options metadata.
+    pub fn generate_options(&self) -> GenerateOptions {
+        let mut options = self.generate_options.clone();
+        let Some(grammar) = self.runtime_grammar() else {
+            return options;
+        };
+        if !options.options_metadata.is_object() {
+            options.options_metadata = serde_json::json!({});
+        }
+        let metadata = options
+            .options_metadata
+            .as_object_mut()
+            .expect("options metadata object");
+        let llama = metadata
+            .entry("llama")
+            .or_insert_with(|| serde_json::json!({}));
+        if !llama.is_object() {
+            *llama = serde_json::json!({});
+        }
+        llama
+            .as_object_mut()
+            .expect("llama metadata object")
+            .insert("grammar".into(), grammar);
+        options
     }
 
     /// Register discovered models for this process. Ids already configured
@@ -293,14 +337,9 @@ impl qt_core::provider::ProviderBackend for LlamaProviderBackend {
                 None => Settings::load(&self.home).unwrap_or_default(),
             };
             let runtime = self.runtime(&settings);
-            crate::provider::stream_with_options(
-                &runtime,
-                request,
-                &self.generate_options,
-                cancel,
-                on_event,
-            )
-            .await
+            let options = self.generate_options();
+            crate::provider::stream_with_options(&runtime, request, &options, cancel, on_event)
+                .await
         })
     }
 }
@@ -407,5 +446,33 @@ mod tests {
         let _ = backend.providers(&settings);
         let _ = backend.providers(&settings);
         assert_eq!(backend.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn runtime_grammar_override_merges_into_generate_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = GenerateOptions {
+            options_metadata: json!({"grammar": "root ::= \"x\"", "llama": {"generation": {"topK": 3}}}),
+            ..Default::default()
+        };
+        let backend = LlamaProviderBackend::new(AgentHome::new(dir.path()))
+            .with_generate_options(base.clone());
+        assert_eq!(backend.generate_options(), base);
+        backend.set_runtime_grammar(Some(json!({"inline": "root ::= \"y\"", "root": "root"})));
+        let merged = backend.generate_options();
+        assert_eq!(
+            merged.options_metadata["llama"],
+            json!({"generation": {"topK": 3}, "grammar": {"inline": "root ::= \"y\"", "root": "root"}})
+        );
+        let settings = LlamaSettings::default();
+        let resolved = crate::sampling::resolve_grammar(&settings, &merged).unwrap();
+        assert!(resolved.enabled);
+        assert_eq!(resolved.grammar, "root ::= \"y\"");
+        backend.set_runtime_grammar(Some(json!({"enabled": false})));
+        let off = crate::sampling::resolve_grammar(&settings, &backend.generate_options()).unwrap();
+        assert!(!off.enabled);
+        backend.set_runtime_grammar(None);
+        assert_eq!(backend.runtime_grammar(), None);
+        assert_eq!(backend.generate_options(), base);
     }
 }

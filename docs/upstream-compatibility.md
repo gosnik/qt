@@ -273,13 +273,33 @@ effective llama settings change.
   models with select/load/"use in chat" and GGUF discovery, a prompt/run/embedding
   playground, KV cache, GPU, policy and grammar); discovered models are persisted and the
   model picker is refreshed, so llama models appear in the main picker.
+- **`/llama grammar`** follows the archived handler: `inline <gbnf>` and
+  `file <path> [root]` set a process-wide runtime override (`llama.grammar` provider option
+  metadata) used by every later conversation turn, `/llama prompt` and `/llama run`; `off`
+  sets `{"enabled": false}`; `status|show` prints the `grammar:` line plus
+  `runtime_override: <json|null>`. File paths expand `~`, resolve relative to cwd, follow
+  symlinks and must stay under cwd, the workspace root, the agent home or
+  `<process cwd>/lib/llama.cpp/grammars` (archived refusal wording). Archived usage errors
+  and "configured for subsequent turns" lines are kept.
+- **`/llama run instruct`** offers the active conversation's tools (all available tools
+  without one) with `tool_choice` auto (the archived intent heuristic may force it), 128
+  output tokens per step, executes each tool call through the normal tool set (workspace and
+  mutation policy, aliases, output guard) and loops for at most 8 rounds with the archived
+  lines: `tool_call:`, `tool_result: <status>[ - error]`, `tool_loop: repeated tool call
+  suppressed:`, `Llama instruct follow-up failed:`, `Llama instruct tool loop stopped after
+  8 rounds.`, `tool_output:` (4000-byte truncation) and `tools_available: N`; `search_text`
+  /`grep` calls without a query infer `{query, path, literal}` from the request as archived.
+  `gpu` accepts the archived `useMmap`/`useMlock` keys and per-key error messages.
 - **Differences (`/llama`):** `gpu key=value` and `policy key=value` write
   `settings.llama.backend` / `llama.generation` (the runtime is recreated with them on next
-  use) instead of the archived per-session pending overrides; `grammar` offers
-  `show|list|default <name>|off` over the configured `llama.grammar.files` (persisted as
-  `llama.grammar.default`) instead of the archived per-session inline/file overrides;
-  `run instruct` generates once without the archived 8-round framework tool loop; `prompt`
-  and `run` use non-streaming generation.
+  use) instead of the archived per-session pending overrides; `grammar` additionally offers
+  `list` and `default <name>` over `llama.grammar.files` (persisted as
+  `llama.grammar.default`, clearing the runtime override); `/llama status` adds a
+  `grammar_override:` line while an override is set. The instruct follow-up step replays the
+  whole exchange (request, tool call, results, archived instruction) because the native
+  backend reuses a cached prompt prefix instead of appending to the retained session, and
+  tool results sent back to the model are capped at 6000 bytes; tool output is text, so
+  `output` in result records is a string. `prompt` and `run` use non-streaming generation.
 
 - **Compatible:** `settings.llama` keys, defaults, error and validation messages; path
   resolution from the settings file directory with `~`; GGUF discovery roots, ids,

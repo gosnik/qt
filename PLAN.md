@@ -78,6 +78,7 @@ core slash registry, prompt history, user bash, `@file`, JSON event serialiser.
 - [x] Ollama management: instance CRUD, status, running, info, pull, load/unload, delete (GUI panel).
 - [ ] Image handling: dimension sniffing, EXIF orientation, resize to 2000×2000 / 4.5 MiB, `images.autoResize`.
 - [x] In-process llama.cpp via a `qt-llama-sys` crate building the PrismML fork (Vulkan/CPU verified on Linux 2026-11-18: discovery, contextWindow, GPU offload, generation through qt-cli); settings.llama, offload planning, GGUF discovery, tool-call parsing, embeddings, `/llama` panel.
+  - [x] `/llama` archived parity: `grammar inline|file|off` runtime override with safe path resolution (shown by `grammar show` and `status`), `run instruct` 8-round framework tool loop (128 tokens/step, repeat suppression, archived lines), `gpu` `useMmap`/`useMlock` and archived errors. Verified with qwen2.5-3B on CPU (`QT_LLAMA_COMMAND_TESTS=1`, `crates/qt-runtime/tests/llama_commands_native.rs`).
 
 ## Milestone 5: Tools
 
