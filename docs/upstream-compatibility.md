@@ -363,3 +363,74 @@ Pi has no persistent-memory contract; the archived qt is the reference.
 - **Not yet ported:** recall (lexical, graph, dense, code), context rendering, the
   pre-handler, capture/ingestion, post-processing, Dreaming, research, the verifier, memory
   tools, the `qt memory` CLI and the GUI.
+
+## Subagents (`qt-subagents`)
+
+The archived qt is the reference (`archived/src/tools/subagent_tool.cpp`,
+`archived/src/app/runtime/subagent_coordinator.cpp`, `archived/docs/persistent-subagents.md`);
+Pi's subagent extension example supplies the child JSON contract.
+
+- **Definitions:** `*.md` files (recursively, `*.chain.md` skipped) with the archived
+  line-based frontmatter: `name`, `description` (both required), `package` (name becomes
+  `<package>.<name>`), `tools` (comma or space list), `model`, `thinking`,
+  `systemPromptMode` (`replace`/`append`), `inheritProjectContext`, `inheritSkills`,
+  `maxSubagentDepth`/`maxDepth`, `disabled`; the body is the system prompt. An agent named
+  `delegate` defaults to append mode with project context. Built-ins `scout`, `planner`,
+  `reviewer`, `worker` keep the archived descriptions, tool lists, prompts and max depth 0.
+  Discovery: built-ins, then `<agent_home>/agents` (scope `user`/`both`), then the nearest
+  ancestor `.agents` and `.pi/agents` (scope `project`/`both`, `.pi/agents` wins); later
+  scopes override by name and `disabled` hides an agent. Diagnostics use the archived wording.
+- **Tool:** the `subagent` schema, description and validation messages are the archived
+  ones: single `{agent, task}`, parallel `{tasks}` (default 8 tasks, concurrency 4, hard cap
+  32, results in source order, the call succeeds even when children fail), chain `{chain}`
+  with `{previous}`/`{task}` substitution stopping at the first failure, `action=list`,
+  project trust via `confirmProjectAgents=false`, depth limits from `QT_SUBAGENT_DEPTH` /
+  `QT_SUBAGENT_MAX_DEPTH` (default 2; an agent's own max depth narrows its children), child
+  cwd resolved from the workspace root and checked against the workspace policy, and the
+  mutation queue (kind `command`). Parallel output keeps the
+  `N/M subagents completed` / `=== Task i: agent ===` layout.
+- **Children:** `qt-cli --mode json --no-session --no-extensions [--no-context-files]
+  [--no-skills] (--tools a,b | --no-tools) [--model m[:thinking]] [--system-prompt |
+  --append-system-prompt] "Task: <task>"` with `QT_SUBAGENT_CHILD`, `QT_SUBAGENT_DEPTH`,
+  `QT_SUBAGENT_MAX_DEPTH`, `QT_SUBAGENT_RUN_ID`, `QT_SUBAGENT_NAME`, `QT_CODING_AGENT_DIR`.
+  The final output comes from the `agent_end` event's messages; non-JSON lines become
+  diagnostics. Persistent workers drop `--no-session`, add `--session <worker
+  session.jsonl>`, pass the turn on stdin, inherit the parent's model (`--provider`), filter
+  tools by the parent's active tools and set `QT_SUBAGENT_PATH` and
+  `QT_SUBAGENT_PARENT_SESSION`.
+- **Persistent workers:** `spawn`/`send`/`follow_up`/`wait`/`interrupt`/`list_workers` with
+  the archived arguments, results and errors; targets `/root/<name>` (or `QT_SUBAGENT_PATH`
+  in a child); names unique; mailbox and generation counter; `fork` `none|all|N` snapshots
+  with in-flight tool calls closed by "Parent tool call was still running when this
+  context was forked."; storage `<agent_home>/subagents/<fnv1a64(parent session)>/`
+  (`children.json` version 1 written atomically 0600, exclusive `children.lock`,
+  `<name>/session.jsonl` with a Pi v3 header carrying `parentSession` and `subagent`
+  lineage); at most four worker processes per host process; `subagent_start` /
+  `subagent_complete` events (`child_id`, `generation`, `event_id`, `status`, `output`,
+  `messages`, `exit_code`, `error`) pending until taken or acknowledged; workers that were
+  running when the parent stopped come back `interrupted` with a `recovered` event.
+  Permissions (workspace, external access, tools) are re-checked before messaging a worker.
+- **Delivery:** completions reach the parent as `custom` messages with
+  `customType: "subagent_event"`, the event JSON as text and as `details`, delivered as a
+  follow-up (starting a run when idle), then acknowledged. JSON/RPC frames are
+  `{"type":"subagent_event","subagent":<event>}`.
+- **`/subagent`:** `list [scope]`, `help`, the role menu entries, `spawn`, `workers`,
+  `send`, `follow_up`, `interrupt`, `wait` (1 s) and `call <JSON>` with the archived
+  wording, as library functions for the front ends.
+- **Differences:**
+  - The child executable is `QT_SUBAGENT_EXECUTABLE`, else `qt-cli` beside the running
+    binary, else `qt-cli` on `PATH` (the archived binary re-executed itself).
+  - Final output takes the last assistant message with text (Pi `getFinalOutput`); the
+    archived parser also accepted text from other roles.
+  - Synchronous children also receive `QT_SUBAGENT_ALLOW_EXTERNAL`.
+  - Definition files are read in sorted path order so overrides within a directory are
+    deterministic; worker listings are sorted by id.
+  - A child cwd must exist (it is canonicalised before the policy check).
+  - Run modes return the output text to the model with the JSON result in `details`;
+    `list` and the worker actions return the JSON as text. Failures carry
+    `details.status` (`invalid_request`, `permission_denied`, `not_found`,
+    `execution_error`, `pending_approval`).
+  - Live progress is a short per-child status text (`1. scout [running]` plus the latest
+    output lines) instead of JSON snapshots.
+  - Cancellation kills the child's process group (the Linux descendant walk across
+    process groups is not ported). A persistent `wait` ends when the parent aborts.

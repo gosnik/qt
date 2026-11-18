@@ -1,0 +1,30 @@
+[package]
+name = "qt-subagents"
+description = "Subagents for qt: agent definitions, the subagent tool, child qt-cli processes and persistent workers"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-channel.workspace = true
+chrono.workspace = true
+futures.workspace = true
+qt-core.workspace = true
+rand.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+# Scripted child agent used by the integration tests in place of qt-cli. It
+# prints Pi-shaped JSONL events and is only built for this crate's tests.
+[[bin]]
+name = "qt-subagents-mock-child"
+path = "tests/support/mock_child.rs"
+test = false
+doc = false

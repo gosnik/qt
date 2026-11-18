@@ -76,6 +76,12 @@ from the lists above.
 | --- | --- |
 | `rusqlite` (bundled) | SQLite store at `<agent_home>/memory/memory.sqlite3`; the bundled build provides FTS5 and JSON1, matching the archived schema and migrations without a system SQLite |
 
+## Subagents (`qt-subagents`)
+
+No crates beyond the lists above: `qt-core`, `tokio`, `tokio-util`, `futures`,
+`async-channel`, `serde_json`, `chrono`, `rand`, `libc` (unix, process-group kill) and
+`tempfile` (dev). The worker index lock uses `std::fs::File::try_lock`.
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including
