@@ -20,6 +20,7 @@ globset = "0.4"
 ignore = "0.4"
 libc = "0.2"
 rand = "0.9"
+rusqlite = { version = "0.43", features = ["bundled"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }

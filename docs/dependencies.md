@@ -27,6 +27,12 @@ and pinned by `Cargo.lock`. Add a crate only together with an entry here.
 | `libc` (unix) | Killing a bash process group on timeout or abort |
 | `tempfile` (dev) | Test fixtures |
 
+## Governed memory (`qt-memory`)
+
+| Crate | Why |
+| --- | --- |
+| `rusqlite` (bundled) | SQLite store at `<agent_home>/memory/memory.sqlite3`; the bundled build provides FTS5 and JSON1, matching the archived schema and migrations without a system SQLite |
+
 ## System packages
 
 - **Linux:** `pkg-config`, a C toolchain, and development files for xkbcommon (including
