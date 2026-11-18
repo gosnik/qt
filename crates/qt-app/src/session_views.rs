@@ -404,6 +404,7 @@ impl TreePanel {
                 let has = row.is_some();
                 let fork_id = row.map(|r| r.id.clone());
                 h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
                         Button::new("tree-navigate")
@@ -576,8 +577,10 @@ impl Render for TreePanel {
             }),
         )
         .track_scroll(&self.scroll)
-        .h(px(420.));
+        .flex_1()
+        .min_h_0();
         v_flex()
+            .size_full()
             .gap_2()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && matches!(this.mode, TreeMode::Summarizing) {
@@ -587,14 +590,17 @@ impl Render for TreePanel {
             }))
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .items_center()
-                    .child(filters)
+                    .child(filters.flex_wrap())
                     .child(div().flex_1())
                     .child(div().w(px(220.)).child(Input::new(&self.search).small())),
             )
             .child(
-                div()
+                v_flex()
+                    .flex_1()
+                    .min_h(px(120.))
                     .rounded_md()
                     .border_1()
                     .border_color(theme.border)
@@ -637,13 +643,12 @@ pub fn open_tree(
     let panel =
         cx.new(|cx| TreePanel::new(engine.clone(), conversation.clone(), on_action, window, cx));
     let conversation = conversation.clone();
-    window.open_dialog(cx, move |dialog, _, cx| {
+    window.open_dialog(cx, move |dialog, window, cx| {
         // While a branch summary runs, Esc cancels it instead of closing.
         let busy = panel.read(cx).is_summarizing();
         let conversation = conversation.clone();
         let closing = panel.clone();
-        dialog
-            .title("Session tree")
+        crate::layout::fill_panel(dialog.title("Session tree"), window, 820., panel.clone())
             .on_ok(|_, _, _| false)
             .keyboard(!busy)
             .on_close(move |_, _, cx| {
@@ -651,8 +656,6 @@ pub fn open_tree(
                     conversation.abort();
                 }
             })
-            .w(px(820.))
-            .child(panel.clone())
     });
 }
 
@@ -836,7 +839,8 @@ impl Render for SessionPicker {
         let mut list = v_flex()
             .id("session-picker-list")
             .gap_0p5()
-            .h(px(380.))
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll();
         if shown.is_empty() {
             list = list.child(
@@ -928,12 +932,18 @@ impl Render for SessionPicker {
         }
 
         v_flex()
+            .size_full()
             .gap_2()
             .child(
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().flex_1().child(Input::new(&self.search).small()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.search).small()),
+                    )
                     .child(
                         Button::new("scope-folder")
                             .label("This folder")
@@ -958,7 +968,9 @@ impl Render for SessionPicker {
                     ),
             )
             .child(
-                div()
+                v_flex()
+                    .flex_1()
+                    .min_h(px(120.))
                     .rounded_md()
                     .border_1()
                     .border_color(theme.border)
@@ -975,7 +987,12 @@ impl Render for SessionPicker {
                             .text_color(theme.muted_foreground)
                             .child("Import"),
                     )
-                    .child(div().flex_1().child(Input::new(&self.import).small()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.import).small()),
+                    )
                     .child(
                         Button::new("import-browse")
                             .label("Browse…")
@@ -1014,12 +1031,9 @@ pub fn open_picker(
     cx: &mut App,
 ) {
     let panel = cx.new(|cx| SessionPicker::new(engine.clone(), current, on_action, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Resume session")
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("Resume session"), window, 720., panel.clone())
             .on_ok(|_, _, _| false)
-            .w(px(720.))
-            .child(panel.clone())
     });
 }
 

@@ -433,7 +433,13 @@ impl Render for LoginPanel {
         let store = self.store();
         if let Some(flow) = &self.flow {
             let flow_view = self.render_flow(flow, cx);
-            return v_flex().gap_3().child(flow_view).into_any_element();
+            return v_flex()
+                .id("login-flow")
+                .size_full()
+                .overflow_y_scroll()
+                .gap_3()
+                .child(flow_view)
+                .into_any_element();
         }
 
         let mut subs = v_flex().gap_1();
@@ -490,7 +496,8 @@ impl Render for LoginPanel {
         let mut keys = v_flex()
             .id("login-keys")
             .gap_0p5()
-            .max_h(px(300.))
+            .flex_1()
+            .min_h(px(120.))
             .overflow_y_scroll();
         if rows.is_empty() {
             keys = keys.child(
@@ -566,7 +573,12 @@ impl Render for LoginPanel {
         }
         let _ = window;
 
+        // The key list takes the spare height; in a short window the whole
+        // panel scrolls instead of squeezing it.
         v_flex()
+            .id("login-panel")
+            .size_full()
+            .overflow_y_scroll()
             .gap_3()
             .child(
                 div()
@@ -621,14 +633,11 @@ pub fn open(
     cx: &mut App,
 ) {
     let panel = cx.new(|cx| LoginPanel::new(engine.clone(), http.clone(), on_changed, window, cx));
-    window.open_dialog(cx, move |dialog, _window, _cx| {
+    window.open_dialog(cx, move |dialog, window, _cx| {
         let close_panel = panel.clone();
-        dialog
-            .title("Login")
+        crate::layout::fill_panel(dialog.title("Login"), window, 600., panel.clone())
             .on_ok(|_, _, _| false)
-            .w(px(600.))
             .on_close(move |_, _, cx| close_panel.update(cx, |p, _| p.shutdown()))
-            .child(panel.clone())
     });
 }
 

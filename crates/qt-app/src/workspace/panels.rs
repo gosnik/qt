@@ -166,7 +166,8 @@ impl ToolsPanel {
         let mut list = v_flex()
             .id("tool-list")
             .gap_1()
-            .max_h(px(300.))
+            .flex_1()
+            .min_h(px(100.))
             .overflow_y_scroll();
         let mut shown = 0;
         for (i, tool) in tools.iter().enumerate() {
@@ -212,6 +213,9 @@ impl ToolsPanel {
             );
         }
         v_flex()
+            .flex_1()
+            // Explicit minimums: an automatic one would be the whole list.
+            .min_h(px(200.))
             .gap_2()
             .child(
                 h_flex()
@@ -220,6 +224,7 @@ impl ToolsPanel {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(format!(
@@ -256,12 +261,17 @@ impl ToolsPanel {
         let theme = cx.theme().clone();
         let policy = self.engine.mutation_policy();
         let pending = self.engine.mutation_queue().pending();
-        let mut col = v_flex().gap_2().child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(format!("Pending approvals ({})", pending.len())),
-        );
+        // With mutations waiting, the queue shares the height with the tool
+        // list; otherwise it only takes the room its notes need.
+        let mut col = v_flex()
+            .gap_2()
+            .when(!pending.is_empty(), |el| el.flex_1().min_h(px(180.)))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("Pending approvals ({})", pending.len())),
+            );
         if policy == MutationPolicy::Execute {
             col = col.child(
                 div()
@@ -281,7 +291,7 @@ impl ToolsPanel {
         let mut list = v_flex()
             .id("mutation-list")
             .gap_2()
-            .max_h(px(280.))
+            .when(!pending.is_empty(), |el| el.flex_1().min_h(px(100.)))
             .overflow_y_scroll();
         for (i, m) in pending.iter().enumerate() {
             let busy = self.busy.contains(&m.id);
@@ -350,6 +360,9 @@ impl Render for ToolsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         v_flex()
+            .id("tools-panel")
+            .size_full()
+            .overflow_y_scroll()
             .gap_3()
             .child(self.render_tools(cx))
             .child(div().h(px(1.)).bg(theme.border))
@@ -376,12 +389,9 @@ pub fn open_tools(
             cx,
         )
     });
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Tools")
-            .w(px(680.))
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(dialog.title("Tools"), window, 680., panel.clone())
             .on_ok(|_, _, _| false)
-            .child(panel.clone())
     });
 }
 
@@ -447,12 +457,13 @@ impl Render for ContextInspector {
             );
         }
         v_flex()
+            .size_full()
             .gap_2()
             .child(
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().flex_1().child(tabs))
+                    .child(div().flex_1().min_w_0().child(tabs))
                     .child(
                         Button::new("context-refresh")
                             .label("Refresh")
@@ -474,7 +485,8 @@ impl Render for ContextInspector {
             .child(
                 Textarea::new(&self.text)
                     .readonly(true)
-                    .h(px(520.))
+                    .flex_1()
+                    .min_h(px(120.))
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_xs(),
             )
@@ -489,12 +501,14 @@ pub fn open_context(conversation: &Conversation, section: &str, window: &mut Win
         .unwrap_or("all");
     let conversation = conversation.clone();
     let view = cx.new(|cx| ContextInspector::new(conversation, section, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog
-            .title("Context inspector")
-            .w(px(920.))
-            .on_ok(|_, _, _| false)
-            .child(view.clone())
+    window.open_dialog(cx, move |dialog, window, _| {
+        crate::layout::fill_panel(
+            dialog.title("Context inspector"),
+            window,
+            920.,
+            view.clone(),
+        )
+        .on_ok(|_, _, _| false)
     });
 }
 
